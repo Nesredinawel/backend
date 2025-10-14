@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 
 	"auth-service/models"
 )
 
+// UpsertUserInHasura inserts or updates a user record in Hasura
 func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	query := `
 	mutation UpsertUser($email: String!, $name: String, $avatar_url: String) {
@@ -30,7 +33,7 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	}
 	body, _ := json.Marshal(payload)
 
-	req, err := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", cfg.HasuraURL, bytes.NewBuffer(body))
 	if err != nil {
 		return "", err
 	}
@@ -43,8 +46,13 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("hasura returned non-200: %d, body: %s", resp.StatusCode, string(b))
+	}
+
 	var respData struct {
-		Errors []interface{} `json:"errors"`
+		Errors []map[string]interface{} `json:"errors"`
 		Data   struct {
 			InsertUsersOne struct {
 				ID string `json:"id"`
@@ -57,7 +65,8 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	}
 
 	if len(respData.Errors) > 0 {
-		return "", errors.New("hasura returned errors on upsert")
+		errBytes, _ := json.MarshalIndent(respData.Errors, "", "  ")
+		return "", fmt.Errorf("hasura returned errors: %s", string(errBytes))
 	}
 
 	if respData.Data.InsertUsersOne.ID == "" {
