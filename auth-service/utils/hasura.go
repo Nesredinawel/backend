@@ -14,23 +14,48 @@ import (
 // UpsertUserInHasura inserts or updates a user record in Hasura
 func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	query := `
-	mutation UpsertUser($email: String!, $name: String, $avatar_url: String, $password: String) {
+	mutation UpsertUser(
+		$email: String!, 
+		$name: String, 
+		$avatar_url: String, 
+		$password: String, 
+		$provider: String, 
+		$provider_id: String, 
+		$role: String
+	) {
 	  insert_users_one(
-	    object: {email: $email, name: $name, avatar_url: $avatar_url, password: $password},
-	    on_conflict: {constraint: users_email_key, update_columns: [name, avatar_url, password]}
+	    object: {
+	      email: $email,
+	      name: $name,
+	      avatar_url: $avatar_url,
+	      password: $password,
+	      provider: $provider,
+	      provider_id: $provider_id,
+	      role: $role
+	    },
+	    on_conflict: {
+	      constraint: users_email_key,
+	      update_columns: [name, avatar_url, password, provider, provider_id, role]
+	    }
 	  ) {
 	    id
 	  }
 	}`
 
+	// ✅ Prepare mutation variables
+	variables := map[string]interface{}{
+		"email":       user.Email,
+		"name":        user.Name,
+		"avatar_url":  user.AvatarURL,
+		"password":    user.Password,   // can be empty for Google users
+		"provider":    user.Provider,   // "local" or "google"
+		"provider_id": user.ProviderID, // Google unique ID or email
+		"role":        user.Role,       // "user" or "admin"
+	}
+
 	payload := map[string]interface{}{
-		"query": query,
-		"variables": map[string]interface{}{
-			"email":      user.Email,
-			"name":       user.Name,
-			"password":   user.Password,
-			"avatar_url": user.AvatarURL,
-		},
+		"query":     query,
+		"variables": variables,
 	}
 	body, _ := json.Marshal(payload)
 
@@ -90,6 +115,9 @@ func GetUserByEmail(cfg Config, email string) (models.User, error) {
 	    name
 	    password
 	    avatar_url
+	    provider
+	    provider_id
+	    role
 	  }
 	}`
 

@@ -33,27 +33,40 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			Email:    req.Email,
 			Name:     req.Name,
 			Password: hash,
+			Role:     "user",   // default role
+			Provider: "local",  // email signup
 		}
 
 		userID, err := utils.UpsertUserInHasura(cfg, user)
 		if err != nil {
-			log.Printf("upsert user failed: %v\n", err)
+			log.Printf("❌ upsert user failed: %v\n", err)
 			http.Error(w, "failed to create user", http.StatusInternalServerError)
 			return
 		}
 
-		jwtToken, err := utils.GenerateJWT(cfg, userID)
+		// Generate session tokens
+		session, err := utils.GenerateJWT(cfg, userID, user.Role)
 		if err != nil {
 			http.Error(w, "failed to generate token", http.StatusInternalServerError)
 			return
 		}
 
-		json.NewEncoder(w).Encode(map[string]string{
-			"token":   jwtToken,
-			"user_id": userID,
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":  session.AccessToken,
+			"refresh_token": session.RefreshToken,
+			"expires_in":    session.ExpiresIn,
+			"user": map[string]string{
+				"user_id":  userID,
+				"email":    user.Email,
+				"name":     user.Name,
+				"provider": user.Provider,
+				"role":     user.Role,
+			},
 		})
 	}
 }
+
 // EmailLogin verifies user credentials and returns JWT
 func EmailLogin(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +79,7 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		// Fetch user from Hasura by email
+		// Fetch user from Hasura
 		user, err := utils.GetUserByEmail(cfg, req.Email)
 		if err != nil {
 			http.Error(w, "user not found", http.StatusUnauthorized)
@@ -78,16 +91,25 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		// Generate JWT
-		token, err := utils.GenerateJWT(cfg, user.ID)
+		// Generate session tokens using user's role
+		session, err := utils.GenerateJWT(cfg, user.ID, user.Role)
 		if err != nil {
 			http.Error(w, "failed to generate token", http.StatusInternalServerError)
 			return
 		}
 
-		json.NewEncoder(w).Encode(map[string]string{
-			"token":   token,
-			"user_id": user.ID,
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":  session.AccessToken,
+			"refresh_token": session.RefreshToken,
+			"expires_in":    session.ExpiresIn,
+			"user": map[string]string{
+				"user_id":  user.ID,
+				"email":    user.Email,
+				"name":     user.Name,
+				"provider": user.Provider,
+				"role":     user.Role,
+			},
 		})
 	}
 }
