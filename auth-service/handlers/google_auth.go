@@ -91,7 +91,7 @@ func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 			AvatarURL:  gu.Picture,
 			Provider:   "google",
 			ProviderID: gu.ID,
-			Role:       "user", // default role
+			Role:       "user",
 		}
 
 		// Upsert user in Hasura
@@ -102,6 +102,11 @@ func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
+		// Automatically create empty profile
+		if err := utils.CreateEmptyUserProfile(cfg, userID); err != nil {
+			log.Printf("⚠️ failed to create user profile: %v\n", err)
+		}
+
 		// Generate secure JWT session token
 		session, err := utils.GenerateJWT(cfg, userID, user.Role)
 		if err != nil {
@@ -110,8 +115,8 @@ func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		// Pretty-print response JSON
+		respBody := map[string]interface{}{
 			"access_token":  session.AccessToken,
 			"refresh_token": session.RefreshToken,
 			"expires_in":    session.ExpiresIn,
@@ -123,6 +128,10 @@ func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 				"provider": user.Provider,
 				"role":     user.Role,
 			},
-		})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		pretty, _ := json.MarshalIndent(respBody, "", "  ")
+		w.Write(pretty)
 	}
 }

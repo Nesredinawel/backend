@@ -33,8 +33,8 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			Email:    req.Email,
 			Name:     req.Name,
 			Password: hash,
-			Role:     "user",   // default role
-			Provider: "local",  // email signup
+			Role:     "user",
+			Provider: "local",
 		}
 
 		userID, err := utils.UpsertUserInHasura(cfg, user)
@@ -44,6 +44,11 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
+		// Create empty profile
+		if err := utils.CreateEmptyUserProfile(cfg, userID); err != nil {
+			log.Printf("⚠️ failed to create user profile: %v\n", err)
+		}
+
 		// Generate session tokens
 		session, err := utils.GenerateJWT(cfg, userID, user.Role)
 		if err != nil {
@@ -51,8 +56,7 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		resp := map[string]interface{}{
 			"access_token":  session.AccessToken,
 			"refresh_token": session.RefreshToken,
 			"expires_in":    session.ExpiresIn,
@@ -63,7 +67,11 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 				"provider": user.Provider,
 				"role":     user.Role,
 			},
-		})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		pretty, _ := json.MarshalIndent(resp, "", "  ") // Pretty JSON
+		w.Write(pretty)
 	}
 }
 
@@ -79,7 +87,7 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		// Fetch user from Hasura
+		// Fetch user
 		user, err := utils.GetUserByEmail(cfg, req.Email)
 		if err != nil {
 			http.Error(w, "user not found", http.StatusUnauthorized)
@@ -91,15 +99,14 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		// Generate session tokens using user's role
+		// Generate session tokens
 		session, err := utils.GenerateJWT(cfg, user.ID, user.Role)
 		if err != nil {
 			http.Error(w, "failed to generate token", http.StatusInternalServerError)
 			return
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		resp := map[string]interface{}{
 			"access_token":  session.AccessToken,
 			"refresh_token": session.RefreshToken,
 			"expires_in":    session.ExpiresIn,
@@ -110,6 +117,10 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 				"provider": user.Provider,
 				"role":     user.Role,
 			},
-		})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		pretty, _ := json.MarshalIndent(resp, "", "  ")
+		w.Write(pretty)
 	}
 }
