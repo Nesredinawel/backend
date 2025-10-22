@@ -10,13 +10,13 @@ import (
 )
 
 // ===============================
-// 📌 Create Empty User Profile
+// 📌 Create Empty User Profile in auth_service schema
 // Called after signup or Google login
 // ===============================
 func CreateEmptyUserProfile(cfg Config, userID string) error {
 	query := `
 	mutation InsertUserProfile($user_id: uuid!) {
-		insert_user_profiles_one(object: {user_id: $user_id}) {
+		insert_auth_service_user_profiles_one(object: {user_id: $user_id}) {
 			id
 			user_id
 		}
@@ -47,12 +47,12 @@ func CreateEmptyUserProfile(cfg Config, userID string) error {
 }
 
 // ===============================
-// 📌 Get User Profile
+// 📌 Get User Profile from auth_service schema
 // ===============================
 func GetUserProfileFromHasura(cfg Config, userID string) (*models.UserProfile, error) {
 	query := `
 	query GetUserProfile($user_id: uuid!) {
-		user_profiles(where: {user_id: {_eq: $user_id}}) {
+		auth_service_user_profiles(where: {user_id: {_eq: $user_id}}) {
 			id
 			user_id
 			bio
@@ -86,7 +86,7 @@ func GetUserProfileFromHasura(cfg Config, userID string) (*models.UserProfile, e
 
 	var result struct {
 		Data struct {
-			UserProfiles []models.UserProfile `json:"user_profiles"`
+			UserProfiles []models.UserProfile `json:"auth_service_user_profiles"`
 		} `json:"data"`
 	}
 
@@ -102,12 +102,12 @@ func GetUserProfileFromHasura(cfg Config, userID string) (*models.UserProfile, e
 }
 
 // ===============================
-// 📌 Update User Profile (Upsert)
+// 📌 Update User Profile (Upsert) in auth_service schema
 // ===============================
 func UpdateUserProfileInHasura(cfg Config, profile models.UserProfile) (*models.UserProfile, error) {
 	query := `
 	mutation UpsertUserProfile($user_id: uuid!, $bio: String, $custom_avatar_url: String) {
-		insert_user_profiles_one(
+		insert_auth_service_user_profiles_one(
 			object: { user_id: $user_id, bio: $bio, custom_avatar_url: $custom_avatar_url },
 			on_conflict: {
 				constraint: user_profiles_user_id_key,
@@ -123,7 +123,6 @@ func UpdateUserProfileInHasura(cfg Config, profile models.UserProfile) (*models.
 		}
 	}`
 
-	// Helper function to dereference or return nil
 	nilIfEmpty := func(s *string) interface{} {
 		if s == nil {
 			return nil
@@ -131,7 +130,6 @@ func UpdateUserProfileInHasura(cfg Config, profile models.UserProfile) (*models.
 		return *s
 	}
 
-	// Build variables with proper dereferencing
 	variables := map[string]interface{}{
 		"user_id":           profile.UserID,
 		"bio":               nilIfEmpty(profile.Bio),
@@ -160,7 +158,7 @@ func UpdateUserProfileInHasura(cfg Config, profile models.UserProfile) (*models.
 
 	var result struct {
 		Data struct {
-			InsertUserProfilesOne models.UserProfile `json:"insert_user_profiles_one"`
+			InsertUserProfilesOne models.UserProfile `json:"insert_auth_service_user_profiles_one"`
 		} `json:"data"`
 	}
 

@@ -11,7 +11,7 @@ import (
 	"auth-service/models"
 )
 
-// UpsertUserInHasura inserts or updates a user record in Hasura
+// UpsertUserInHasura inserts or updates a user record in Hasura (auth_service.users)
 func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	query := `
 	mutation UpsertUser(
@@ -23,7 +23,7 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 		$provider_id: String, 
 		$role: String
 	) {
-	  insert_users_one(
+	  insert_auth_service_users_one(
 	    object: {
 	      email: $email,
 	      name: $name,
@@ -47,10 +47,10 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 		"email":       user.Email,
 		"name":        user.Name,
 		"avatar_url":  user.AvatarURL,
-		"password":    user.Password,   // can be empty for Google users
-		"provider":    user.Provider,   // "local" or "google"
-		"provider_id": user.ProviderID, // Google unique ID or email
-		"role":        user.Role,       // "user" or "admin"
+		"password":    user.Password,
+		"provider":    user.Provider,
+		"provider_id": user.ProviderID,
+		"role":        user.Role,
 	}
 
 	payload := map[string]interface{}{
@@ -82,9 +82,9 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	var respData struct {
 		Errors []map[string]interface{} `json:"errors"`
 		Data   struct {
-			InsertUsersOne struct {
+			InsertAuthServiceUsersOne struct {
 				ID string `json:"id"`
-			} `json:"insert_users_one"`
+			} `json:"insert_auth_service_users_one"`
 		} `json:"data"`
 	}
 
@@ -97,19 +97,19 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 		return "", fmt.Errorf("hasura returned errors: %s", string(errBytes))
 	}
 
-	if respData.Data.InsertUsersOne.ID == "" {
+	if respData.Data.InsertAuthServiceUsersOne.ID == "" {
 		return "", errors.New("no user id returned from hasura")
 	}
 
-	fmt.Println("[DEBUG] ⇦ Upsert success user_id:", respData.Data.InsertUsersOne.ID)
-	return respData.Data.InsertUsersOne.ID, nil
+	fmt.Println("[DEBUG] ⇦ Upsert success user_id:", respData.Data.InsertAuthServiceUsersOne.ID)
+	return respData.Data.InsertAuthServiceUsersOne.ID, nil
 }
 
-// GetUserByEmail fetches a user from Hasura by email
+// GetUserByEmail fetches a user from Hasura by email (auth_service.users)
 func GetUserByEmail(cfg Config, email string) (models.User, error) {
 	query := `
 	query GetUser($email: String!) {
-	  users(where: {email: {_eq: $email}}) {
+	  auth_service_users(where: {email: {_eq: $email}}) {
 	    id
 	    email
 	    name
@@ -141,7 +141,7 @@ func GetUserByEmail(cfg Config, email string) (models.User, error) {
 
 	var respData struct {
 		Data struct {
-			Users []models.User `json:"users"`
+			AuthServiceUsers []models.User `json:"auth_service_users"`
 		} `json:"data"`
 		Errors []interface{} `json:"errors"`
 	}
@@ -152,10 +152,10 @@ func GetUserByEmail(cfg Config, email string) (models.User, error) {
 	if len(respData.Errors) > 0 {
 		fmt.Println("[DEBUG] Hasura error:", respData.Errors)
 	}
-	if len(respData.Data.Users) == 0 {
+	if len(respData.Data.AuthServiceUsers) == 0 {
 		return models.User{}, errors.New("user not found")
 	}
 
-	fmt.Println("[DEBUG] ⇦ Found user:", respData.Data.Users[0].Email)
-	return respData.Data.Users[0], nil
+	fmt.Println("[DEBUG] ⇦ Found user:", respData.Data.AuthServiceUsers[0].Email)
+	return respData.Data.AuthServiceUsers[0], nil
 }
