@@ -6,22 +6,28 @@ import (
 )
 
 type Config struct {
-	PostgresDSN    string // e.g. postgres://postgres:password@postgres:5432/moodtracker?sslmode=disable
-	AuthServiceURL string // e.g. http://auth-service:8081
-	JWTSecret      string // same secret as auth-service
-	Port           string
+	HasuraEndpoint    string
+	HasuraAdminSecret string
+	JWTSecret         string
+	Port              string
 }
 
 func LoadConfig() (Config, error) {
 	cfg := Config{
-		PostgresDSN:    os.Getenv("POSTGRES_DSN"),
-		AuthServiceURL: os.Getenv("AUTH_SERVICE_URL"),
-		JWTSecret:      os.Getenv("JWT_SECRET"),
-		Port:           os.Getenv("PORT"),
+		HasuraEndpoint:    os.Getenv("HASURA_GRAPHQL_ENDPOINT"),
+		HasuraAdminSecret: os.Getenv("HASURA_GRAPHQL_ADMIN_SECRET"),
+		JWTSecret:         os.Getenv("JWT_SECRET"), // same as auth-service
+		Port:              os.Getenv("PORT_2"),     // default mood-service port
 	}
+
+	if cfg.HasuraEndpoint == "" || cfg.HasuraAdminSecret == "" {
+		log.Println("⚠️ WARNING: Hasura endpoint or admin secret missing")
+	}
+
 	if cfg.Port == "" {
 		cfg.Port = "8082"
 	}
-	log.Printf("[mood-service] loaded config: %+v\n", cfg)
+
+	log.Printf("[mood-service] Loaded config: %+v\n", cfg)
 	return cfg, nil
 }

@@ -1,41 +1,28 @@
 package main
 
 import (
-	"database/sql"
 	"log"
+	"net/http"
+
 	"mood-service/routes"
 	"mood-service/utils"
-	"net/http"
-	"time"
 )
 
 func main() {
-	cfg, _ := utils.LoadConfig()
-
-	var db *sql.DB
-	var err error
-
-	// Retry loop for DB connection
-	for i := 1; i <= 10; i++ {
-		db, err = utils.ConnectDB(cfg.PostgresDSN)
-		if err == nil {
-			log.Println("✅ Connected to PostgreSQL")
-			break
-		}
-		log.Printf("⏳ Waiting for database... (attempt %d/10): %v", i, err)
-		time.Sleep(5 * time.Second)
-	}
-
+	// Load configuration
+	cfg, err := utils.LoadConfig()
 	if err != nil {
-		log.Fatalf("❌ Could not connect to PostgreSQL after 10 attempts: %v", err)
+		log.Fatalf("❌ Failed to load config: %v", err)
 	}
-	defer db.Close()
 
-	r := routes.SetupRoutes(cfg, db)
+	// Setup routes
+	r := routes.SetupRoutes(cfg)
 
-	addr := ":" + cfg.Port
-	log.Printf("🚀 mood-service running on %s", addr)
-	if err := http.ListenAndServe(addr, r); err != nil {
-		log.Fatalf("❌ server failed: %v", err)
-	}
+	// Print routes info
+	routes.PrintRoutes(cfg)
+
+	// Start server
+	port := cfg.Port
+	log.Printf("[mood-service] ✅ Starting server on port %s\n", port)
+	log.Fatal(http.ListenAndServe(":"+port, r))
 }
