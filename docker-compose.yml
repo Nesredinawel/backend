@@ -62,6 +62,17 @@ services:
       - hasura
       - postgres
       - auth-service
-
+  blog-service:
+    build:
+      context: ./blog-service
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    ports:
+      - "8083:8083"
+    depends_on:
+      - hasura
+      - postgres
+      - auth-service
 volumes:
   pgdata:
