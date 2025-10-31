@@ -13,8 +13,44 @@ import (
 
 // UpsertUserInHasura inserts or updates a user record in Hasura (auth_service.users)
 func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
+	existing, err := GetUserByEmail(cfg, user.Email)
+	if err == nil && existing.ID != "" {
+		// 🧠 Existing user found → handle linking or updating provider/password
+		fmt.Printf("[INFO] Existing user found for %s (provider=%s)\n", existing.Email, existing.Provider)
+
+		// 1️⃣ If provider differs (e.g., Google → local or vice versa)
+		if existing.Provider != user.Provider {
+			fmt.Printf("[INFO] Linking new provider '%s' for user %s\n", user.Provider, existing.Email)
+
+			// If user signs up with Email after Google login — add password
+			if user.Provider == "local" && existing.Password == "" && user.Password != "" {
+				fmt.Println("[INFO] Adding password to Google-linked account.")
+				return UpdateUserPasswordAndProvider(cfg, existing.ID, user.Password, user.Provider)
+			}
+
+			// If user signs up with Google after Email login — just link provider_id
+			if user.Provider != "local" && existing.Provider == "local" && existing.ProviderID == "" {
+				fmt.Println("[INFO] Adding Google provider_id to existing local account.")
+				return UpdateUserProvider(cfg, existing.ID, user.Provider, user.ProviderID)
+			}
+
+			// Default case: just ensure provider consistency
+			return UpdateUserProvider(cfg, existing.ID, user.Provider, user.ProviderID)
+		}
+
+		// 2️⃣ If same provider but missing password (e.g., user sets password later)
+		if existing.Provider == "local" && existing.Password == "" && user.Password != "" {
+			fmt.Println("[INFO] Setting password for existing local user without password.")
+			return UpdateUserPassword(cfg, existing.ID, user.Password)
+		}
+
+		// ✅ Return existing user if everything already matches
+		return existing.ID, nil
+	}
+
+	// 🆕 Create new user if not exists
 	query := `
-	mutation UpsertUser(
+	mutation InsertUser(
 		$email: String!, 
 		$name: String, 
 		$avatar_url: String, 
@@ -32,17 +68,10 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	      provider: $provider,
 	      provider_id: $provider_id,
 	      role: $role
-	    },
-	    on_conflict: {
-	      constraint: users_email_key,
-	      update_columns: [name, avatar_url, password, provider, provider_id, role]
 	    }
-	  ) {
-	    id
-	  }
+	  ) { id }
 	}`
 
-	// ✅ Prepare mutation variables
 	variables := map[string]interface{}{
 		"email":       user.Email,
 		"name":        user.Name,
@@ -59,12 +88,7 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	}
 	body, _ := json.Marshal(payload)
 
-	fmt.Println("[DEBUG] → Sending upsert to Hasura:", cfg.HasuraEndpoint)
-
-	req, err := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
-	if err != nil {
-		return "", err
-	}
+	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
 
@@ -80,29 +104,157 @@ func UpsertUserInHasura(cfg Config, user models.User) (string, error) {
 	}
 
 	var respData struct {
-		Errors []map[string]interface{} `json:"errors"`
-		Data   struct {
+		Data struct {
 			InsertAuthServiceUsersOne struct {
 				ID string `json:"id"`
 			} `json:"insert_auth_service_users_one"`
 		} `json:"data"`
 	}
-
 	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
 		return "", err
-	}
-
-	if len(respData.Errors) > 0 {
-		errBytes, _ := json.MarshalIndent(respData.Errors, "", "  ")
-		return "", fmt.Errorf("hasura returned errors: %s", string(errBytes))
 	}
 
 	if respData.Data.InsertAuthServiceUsersOne.ID == "" {
 		return "", errors.New("no user id returned from hasura")
 	}
 
-	fmt.Println("[DEBUG] ⇦ Upsert success user_id:", respData.Data.InsertAuthServiceUsersOne.ID)
 	return respData.Data.InsertAuthServiceUsersOne.ID, nil
+}
+
+// UpdateUserProvider links a new OAuth provider to an existing user
+func UpdateUserProvider(cfg Config, userID, provider, providerID string) (string, error) {
+	query := `
+	mutation UpdateProvider($id: uuid!, $provider: String!, $provider_id: String) {
+	  update_auth_service_users_by_pk(
+	    pk_columns: {id: $id},
+	    _set: {provider: $provider, provider_id: $provider_id}
+	  ) { id }
+	}`
+
+	payload := map[string]interface{}{
+		"query": query,
+		"variables": map[string]interface{}{
+			"id":          userID,
+			"provider":    provider,
+			"provider_id": providerID,
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("hasura update error: %s", string(b))
+	}
+
+	var respData struct {
+		Data struct {
+			UpdateAuthServiceUsersByPk struct {
+				ID string `json:"id"`
+			} `json:"update_auth_service_users_by_pk"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return "", err
+	}
+
+	return respData.Data.UpdateAuthServiceUsersByPk.ID, nil
+}
+
+// UpdateUserPassword sets a new password for an existing user
+func UpdateUserPassword(cfg Config, userID, password string) (string, error) {
+	query := `
+	mutation UpdatePassword($id: uuid!, $password: String!) {
+	  update_auth_service_users_by_pk(
+	    pk_columns: {id: $id},
+	    _set: {password: $password}
+	  ) { id }
+	}`
+
+	payload := map[string]interface{}{
+		"query": query,
+		"variables": map[string]interface{}{
+			"id":       userID,
+			"password": password,
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var respData struct {
+		Data struct {
+			UpdateAuthServiceUsersByPk struct {
+				ID string `json:"id"`
+			} `json:"update_auth_service_users_by_pk"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return "", err
+	}
+
+	return respData.Data.UpdateAuthServiceUsersByPk.ID, nil
+}
+
+// UpdateUserPasswordAndProvider — when user first had Google, then sets password
+func UpdateUserPasswordAndProvider(cfg Config, userID, password, provider string) (string, error) {
+	query := `
+	mutation UpdatePasswordAndProvider($id: uuid!, $password: String, $provider: String) {
+	  update_auth_service_users_by_pk(
+	    pk_columns: {id: $id},
+	    _set: {password: $password, provider: $provider}
+	  ) { id }
+	}`
+
+	payload := map[string]interface{}{
+		"query": query,
+		"variables": map[string]interface{}{
+			"id":       userID,
+			"password": password,
+			"provider": provider,
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var respData struct {
+		Data struct {
+			UpdateAuthServiceUsersByPk struct {
+				ID string `json:"id"`
+			} `json:"update_auth_service_users_by_pk"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return "", err
+	}
+
+	return respData.Data.UpdateAuthServiceUsersByPk.ID, nil
 }
 
 // GetUserByEmail fetches a user from Hasura by email (auth_service.users)

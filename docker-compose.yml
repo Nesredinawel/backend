@@ -38,6 +38,13 @@ services:
     depends_on:
       - postgres
 
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    restart: always
+
   auth-service:
     build:
       context: ./auth-service
@@ -49,6 +56,7 @@ services:
     depends_on:
       - hasura
       - postgres
+      - redis
 
   mood-service:
     build:
@@ -62,6 +70,8 @@ services:
       - hasura
       - postgres
       - auth-service
+      - redis
+
   blog-service:
     build:
       context: ./blog-service
@@ -74,5 +84,7 @@ services:
       - hasura
       - postgres
       - auth-service
+      - redis
+
 volumes:
   pgdata:

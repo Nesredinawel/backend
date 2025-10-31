@@ -43,6 +43,8 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 		// Email/Password Auth
 		r.Post("/email/signup", handlers.EmailSignup(cfg))
 		r.Post("/email/login", handlers.EmailLogin(cfg))
+		r.Get("/email/verify", handlers.EmailVerify(cfg))
+
 	})
 
 	// ================================
