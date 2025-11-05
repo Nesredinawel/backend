@@ -9,7 +9,7 @@ import (
 	"mood-service/utils"
 )
 
-// CreateMood creates a new mood record
+// CreateMood adds or updates today's mood
 func CreateMood(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		userID := r.Context().Value(middlewares.CtxUserID).(string)
@@ -22,15 +22,16 @@ func CreateMood(cfg utils.Config) http.HandlerFunc {
 
 		req.UserID = userID
 
-		id, err := utils.InsertMood(cfg, req)
+		id, err := utils.InsertOrUpdateMood(cfg, req)
 		if err != nil {
-			http.Error(w, "failed to insert mood", http.StatusInternalServerError)
+			http.Error(w, "failed to insert/update mood", http.StatusInternalServerError)
 			return
 		}
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"mood_id": id,
+			"message": "Mood saved successfully (updated if already exists for today)",
 		})
 	}
 }

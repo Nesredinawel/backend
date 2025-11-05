@@ -20,11 +20,16 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.AllowContentType("application/json", "text/plain"))
 
-	// Protected routes with JWT
-	r.Group(func(r chi.Router) {
-		r.Use(middlewares.JWTAuth(cfg))
-		r.Post("/api/v1/moods", handlers.CreateMood(cfg))
-		r.Get("/api/v1/moods", handlers.GetMoods(cfg))
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(middlewares.JWTAuth(cfg))
+
+			r.Post("/moods", handlers.CreateMood(cfg))
+			r.Get("/moods", handlers.GetMoods(cfg))
+
+			// analytics
+			r.Get("/moods/analytics", handlers.MoodKPI(cfg))
+		})
 	})
 
 	// Health check

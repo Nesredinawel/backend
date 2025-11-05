@@ -5,32 +5,54 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"time"
 
 	"mood-service/models"
 )
 
-// InsertMood inserts a mood record into Hasura
-func InsertMood(cfg Config, mood models.Mood) (string, error) {
+// InsertOrUpdateMood inserts or updates the user's mood for today
+func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
+	today := time.Now().Format("2006-01-02")
+
 	query := `
-	mutation InsertMood($user_id: uuid!, $mood: String!, $emoji: String, $note: String, $mood_date: date) {
-	  insert_mood_service_moods_one(object: {
-	    user_id: $user_id,
-	    mood: $mood,
-	    emoji: $emoji,
-	    note: $note,
-	    mood_date: $mood_date
-	  }) {
-	    id
-	  }
+	mutation UpsertMood(
+		$user_id: uuid!,
+		$mood: String!,
+		$emoji: String,
+		$note: String,
+		$mood_score: Int,
+		$mood_date: date!
+	) {
+		insert_mood_service_moods_one(
+			object: {
+				user_id: $user_id,
+				mood: $mood,
+				emoji: $emoji,
+				note: $note,
+				mood_score: $mood_score,
+				mood_date: $mood_date
+			},
+			on_conflict: {
+				constraint: moods_user_id_mood_date_key,
+				update_columns: [mood, emoji, note, mood_score, updated_at]
+			}
+		) {
+			id
+			mood_date
+		}
 	}`
+
 	variables := map[string]interface{}{
-		"user_id":   mood.UserID,
-		"mood":      mood.Mood,
-		"emoji":     mood.Emoji,
-		"note":      mood.Note,
-		"mood_date": mood.MoodDate,
+		"user_id":    mood.UserID,
+		"mood":       mood.Mood,
+		"emoji":      mood.Emoji,
+		"note":       mood.Note,
+		"mood_score": mood.MoodScore,
+		"mood_date":  today,
 	}
+
 	payload := map[string]interface{}{
 		"query":     query,
 		"variables": variables,
@@ -43,31 +65,39 @@ func InsertMood(cfg Config, mood models.Mood) (string, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		log.Printf("❌ Error sending request to Hasura: %v", err)
 		return "", err
 	}
 	defer resp.Body.Close()
 
+	b, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("hasura returned non-200: %d, %s", resp.StatusCode, string(b))
+		log.Printf("❌ Hasura returned %d: %s", resp.StatusCode, string(b))
+		return "", fmt.Errorf("hasura returned non-200: %d", resp.StatusCode)
 	}
 
 	var respData struct {
 		Data struct {
 			InsertMoodServiceMoodsOne struct {
-				ID string `json:"id"`
+				ID       string `json:"id"`
+				MoodDate string `json:"mood_date"`
 			} `json:"insert_mood_service_moods_one"`
 		} `json:"data"`
 		Errors []interface{} `json:"errors"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+	if err := json.Unmarshal(b, &respData); err != nil {
+		log.Printf("❌ Error decoding Hasura response: %v\nBody: %s", err, string(b))
 		return "", err
 	}
+
 	if len(respData.Errors) > 0 {
+		log.Printf("❌ Hasura errors: %v", respData.Errors)
 		return "", fmt.Errorf("hasura errors: %v", respData.Errors)
 	}
 
+	log.Printf("✅ Mood saved for user %s on %s (ID: %s)", mood.UserID, today, respData.Data.InsertMoodServiceMoodsOne.ID)
 	return respData.Data.InsertMoodServiceMoodsOne.ID, nil
 }
 
@@ -81,6 +111,7 @@ func GetUserMoods(cfg Config, userID string) ([]models.Mood, error) {
 	    emoji
 	    note
 	    mood_date
+		mood_score
 	    created_at
 	    updated_at
 	  }
