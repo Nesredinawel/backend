@@ -37,16 +37,28 @@ func CreatePost(cfg utils.Config) http.HandlerFunc {
 			req.Images = []models.Image{}
 		}
 
-		// Log the payload for debugging
 		log.Printf("Creating post: %+v", req)
 
-		// Insert post using utils
+		// Insert post
 		id, err := utils.InsertPost(cfg, req)
 		if err != nil {
 			log.Printf("❌ InsertPost failed: %v", err)
 			http.Error(w, "failed to insert post: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// 🔔 Send notification event
+		utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
+			UserID:        userID,
+			Title:         "New Post Created",
+			Message:       "Your blog post has been published successfully.",
+			SourceService: "blog-service",
+			Action:        "POST_CREATE",
+			Meta: map[string]interface{}{
+				"post_id": id,
+				"title":   req.Title,
+			},
+		})
 
 		resp := map[string]interface{}{
 			"success": true,
@@ -73,6 +85,22 @@ func GetPosts(cfg utils.Config) http.HandlerFunc {
 			log.Printf("❌ GetPosts failed: %v", err)
 			http.Error(w, "failed to fetch posts: "+err.Error(), http.StatusInternalServerError)
 			return
+		}
+
+		// 🔔 Optional: notify that user viewed posts
+		userIDVal := r.Context().Value(middlewares.CtxUserID)
+		if userIDVal != nil {
+			userID := userIDVal.(string)
+			utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
+				UserID:        userID,
+				Title:         "Posts Viewed",
+				Message:       "You checked blog posts.",
+				SourceService: "blog-service",
+				Action:        "POST_FETCH",
+				Meta: map[string]interface{}{
+					"post_count": len(posts),
+				},
+			})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -109,6 +137,23 @@ func GetPost(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
+		// 🔔 Optional: notify that a single post was viewed
+		userIDVal := r.Context().Value(middlewares.CtxUserID)
+		if userIDVal != nil {
+			userID := userIDVal.(string)
+			utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
+				UserID:        userID,
+				Title:         "Post Viewed",
+				Message:       "You viewed a blog post.",
+				SourceService: "blog-service",
+				Action:        "POST_FETCH_SINGLE",
+				Meta: map[string]interface{}{
+					"post_id": id,
+					"title":   post.Title,
+				},
+			})
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
@@ -141,6 +186,23 @@ func UpdatePost(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
+		// 🔔 Send notification that a post was updated
+		userIDVal := r.Context().Value(middlewares.CtxUserID)
+		if userIDVal != nil {
+			userID := userIDVal.(string)
+			utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
+				UserID:        userID,
+				Title:         "Post Updated",
+				Message:       "A blog post was updated successfully.",
+				SourceService: "blog-service",
+				Action:        "POST_UPDATE",
+				Meta: map[string]interface{}{
+					"post_id": id,
+					"title":   req.Title,
+				},
+			})
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
@@ -163,6 +225,22 @@ func DeletePost(cfg utils.Config) http.HandlerFunc {
 			log.Printf("❌ DeletePost failed id=%s: %v", id, err)
 			http.Error(w, "failed to delete post: "+err.Error(), http.StatusInternalServerError)
 			return
+		}
+
+		// 🔔 Send notification that a post was deleted
+		userIDVal := r.Context().Value(middlewares.CtxUserID)
+		if userIDVal != nil {
+			userID := userIDVal.(string)
+			utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
+				UserID:        userID,
+				Title:         "Post Deleted",
+				Message:       "A blog post was deleted.",
+				SourceService: "blog-service",
+				Action:        "POST_DELETE",
+				Meta: map[string]interface{}{
+					"post_id": id,
+				},
+			})
 		}
 
 		w.Header().Set("Content-Type", "application/json")

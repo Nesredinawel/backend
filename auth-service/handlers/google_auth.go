@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"context"
-	"encoding/json"
-	"log"
-	"net/http"
-
 	"auth-service/models"
 	"auth-service/utils"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -42,6 +42,7 @@ func GoogleLogin() http.HandlerFunc {
 	}
 }
 
+// GoogleCallback handles the OAuth callback from Google
 // GoogleCallback handles the OAuth callback from Google
 func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +115,20 @@ func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 			http.Error(w, "failed to generate JWT", http.StatusInternalServerError)
 			return
 		}
+
+		// 🔔 NOTIFICATION ADDED HERE
+		utils.PublishNotification(rdb, "auth_events", utils.NotificationEvent{
+			UserID:        userID,
+			Title:         "Login Successful",
+			Message:       fmt.Sprintf("%s logged in via Google", user.Email),
+			SourceService: "auth-service",
+			Action:        "GOOGLE_LOGIN",
+			Meta: map[string]interface{}{
+				"email":    user.Email,
+				"provider": user.Provider,
+				"avatar":   user.AvatarURL,
+			},
+		})
 
 		// Pretty-print response JSON
 		respBody := map[string]interface{}{

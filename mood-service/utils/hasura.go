@@ -7,22 +7,93 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"mood-service/models"
 )
 
-// InsertOrUpdateMood inserts or updates the user's mood for today
+// moodScoreMap defines allowed moods and their corresponding scores (0–10 scale)
+var moodScoreMap = map[string]int{
+	"angry":     2,
+	"not good":  4,
+	"not good!": 4,
+	"mediocre":  6,
+	"good":      8,
+	"very good": 10,
+}
+
+// reverseMoodMap maps score → mood for validation or score-based inference
+var reverseMoodMap = map[int]string{
+	2:  "Angry",
+	4:  "Not Good!",
+	6:  "Mediocre",
+	8:  "Good",
+	10: "Very Good",
+}
+
+// getMoodScore normalizes a mood string and returns its score
+func getMoodScore(mood string) (int, error) {
+	mood = strings.TrimSpace(strings.ToLower(mood))
+	if score, ok := moodScoreMap[mood]; ok {
+		return score, nil
+	}
+	log.Printf("⚠️ Invalid mood input: '%s' — allowed: %v", mood, keys(moodScoreMap))
+	return 0, fmt.Errorf("invalid mood: %s", mood)
+}
+
+// getMoodFromScore returns the correct mood string for a given score
+func getMoodFromScore(score int) (string, error) {
+	if mood, ok := reverseMoodMap[score]; ok {
+		return mood, nil
+	}
+	log.Printf("⚠️ Invalid mood_score input: %d — allowed: %v", score, keysInt(reverseMoodMap))
+	return "", fmt.Errorf("invalid mood_score: %d (allowed: 2,4,6,8,10)", score)
+}
+
+// InsertOrUpdateMood inserts or updates the user's mood for today.
+// User only sends mood_score OR mood — backend ensures both are consistent.
 func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 	today := time.Now().Format("2006-01-02")
 
+	// Normalize and validate mood/mood_score consistency
+	var moodText string
+	var moodScore int
+	var err error
+
+	switch {
+	case mood.Mood != "":
+		moodScore, err = getMoodScore(mood.Mood)
+		if err != nil {
+			log.Printf("❌ Mood validation failed: %v | user_id=%s", err, mood.UserID)
+			return "", fmt.Errorf("invalid mood: %v", err)
+		}
+		moodText = strings.Title(strings.ToLower(mood.Mood))
+
+	case mood.MoodScore != nil:
+		moodText, err = getMoodFromScore(*mood.MoodScore)
+		if err != nil {
+			log.Printf("❌ Mood score validation failed: %v | user_id=%s", err, mood.UserID)
+			return "", fmt.Errorf("invalid mood_score: %v", err)
+		}
+		moodScore = *mood.MoodScore
+
+	default:
+		log.Printf("❌ Missing input: neither mood nor mood_score provided | user_id=%s", mood.UserID)
+		return "", fmt.Errorf("either mood or mood_score must be provided")
+	}
+
+	mood.Mood = moodText
+	mood.MoodScore = &moodScore
+
+	// GraphQL mutation
 	query := `
 	mutation UpsertMood(
 		$user_id: uuid!,
 		$mood: String!,
 		$emoji: String,
 		$note: String,
-		$mood_score: Int,
+		$mood_score: Int!,
 		$mood_date: date!
 	) {
 		insert_mood_service_moods_one(
@@ -41,6 +112,7 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 		) {
 			id
 			mood_date
+			mood_score
 		}
 	}`
 
@@ -65,7 +137,7 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("❌ Error sending request to Hasura: %v", err)
+		log.Printf("❌ Error sending request to Hasura: %v | user_id=%s", err, mood.UserID)
 		return "", err
 	}
 	defer resp.Body.Close()
@@ -73,31 +145,34 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 	b, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ Hasura returned %d: %s", resp.StatusCode, string(b))
+		log.Printf("❌ Hasura returned %d for user %s — body: %s", resp.StatusCode, mood.UserID, string(b))
 		return "", fmt.Errorf("hasura returned non-200: %d", resp.StatusCode)
 	}
 
 	var respData struct {
 		Data struct {
 			InsertMoodServiceMoodsOne struct {
-				ID       string `json:"id"`
-				MoodDate string `json:"mood_date"`
+				ID        string `json:"id"`
+				MoodDate  string `json:"mood_date"`
+				MoodScore int    `json:"mood_score"`
 			} `json:"insert_mood_service_moods_one"`
 		} `json:"data"`
 		Errors []interface{} `json:"errors"`
 	}
 
 	if err := json.Unmarshal(b, &respData); err != nil {
-		log.Printf("❌ Error decoding Hasura response: %v\nBody: %s", err, string(b))
+		log.Printf("❌ JSON decode failed for Hasura response: %v\nBody: %s | user_id=%s", err, string(b), mood.UserID)
 		return "", err
 	}
 
 	if len(respData.Errors) > 0 {
-		log.Printf("❌ Hasura errors: %v", respData.Errors)
+		log.Printf("❌ Hasura GraphQL errors for user %s: %v", mood.UserID, respData.Errors)
 		return "", fmt.Errorf("hasura errors: %v", respData.Errors)
 	}
 
-	log.Printf("✅ Mood saved for user %s on %s (ID: %s)", mood.UserID, today, respData.Data.InsertMoodServiceMoodsOne.ID)
+	log.Printf("✅ Mood '%s' (score: %d) saved for user %s on %s (ID: %s)",
+		mood.Mood, moodScore, mood.UserID, today, respData.Data.InsertMoodServiceMoodsOne.ID)
+
 	return respData.Data.InsertMoodServiceMoodsOne.ID, nil
 }
 
@@ -111,11 +186,12 @@ func GetUserMoods(cfg Config, userID string) ([]models.Mood, error) {
 	    emoji
 	    note
 	    mood_date
-		mood_score
+	    mood_score
 	    created_at
 	    updated_at
 	  }
 	}`
+
 	variables := map[string]interface{}{
 		"user_id": userID,
 	}
@@ -131,9 +207,12 @@ func GetUserMoods(cfg Config, userID string) ([]models.Mood, error) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
+		log.Printf("❌ Error sending GetUserMoods request: %v | user_id=%s", err, userID)
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	b, _ := io.ReadAll(resp.Body)
 
 	var respData struct {
 		Data struct {
@@ -142,13 +221,34 @@ func GetUserMoods(cfg Config, userID string) ([]models.Mood, error) {
 		Errors []interface{} `json:"errors"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+	if err := json.Unmarshal(b, &respData); err != nil {
+		log.Printf("❌ JSON decode failed in GetUserMoods: %v\nBody: %s | user_id=%s", err, string(b), userID)
 		return nil, err
 	}
 
 	if len(respData.Errors) > 0 {
+		log.Printf("❌ Hasura GraphQL errors in GetUserMoods for user %s: %v", userID, respData.Errors)
 		return nil, fmt.Errorf("hasura errors: %v", respData.Errors)
 	}
 
+	log.Printf("✅ Retrieved %d moods for user %s", len(respData.Data.Moods), userID)
 	return respData.Data.Moods, nil
+}
+
+// helper: get map keys (string)
+func keys(m map[string]int) []string {
+	k := make([]string, 0, len(m))
+	for key := range m {
+		k = append(k, key)
+	}
+	return k
+}
+
+// helper: get map keys (int)
+func keysInt(m map[int]string) []int {
+	k := make([]int, 0, len(m))
+	for key := range m {
+		k = append(k, key)
+	}
+	return k
 }

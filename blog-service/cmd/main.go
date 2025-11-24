@@ -9,11 +9,8 @@ import (
 )
 
 func main() {
-	// Load configuration
-	cfg, err := utils.LoadConfig()
-	if err != nil {
-		log.Fatalf("❌ Failed to load config: %v", err)
-	}
+	// Load configuration (automatically initializes Redis)
+	cfg := utils.LoadConfig()
 
 	// Setup routes
 	r := routes.SetupRoutes(cfg)
@@ -22,7 +19,6 @@ func main() {
 	routes.PrintRoutes(cfg)
 
 	// Start server
-	port := cfg.Port
-	log.Printf("[blog-service] ✅ Starting server on port %s\n", port)
-	log.Fatal(http.ListenAndServe(":"+port, r))
+	log.Printf("[mood-service] ✅ Starting server on port %s\n", cfg.Port)
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))
 }

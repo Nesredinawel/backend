@@ -28,6 +28,21 @@ func CreateMood(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
+		// 🔔 Send notification event
+		utils.PublishNotification(utils.Rdb, "mood_events", utils.NotificationEvent{
+			UserID:        userID,
+			Title:         "Mood Saved",
+			Message:       "Your daily mood has been recorded.",
+			SourceService: "mood-service",
+			Action:        "MOOD_CREATE_OR_UPDATE",
+			Meta: map[string]interface{}{
+				"mood_id":   id,
+				"mood":      req.MoodScore,
+				"note":      req.Note,
+				"timestamp": req.CreatedAt,
+			},
+		})
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,
 			"mood_id": id,
@@ -46,6 +61,18 @@ func GetMoods(cfg utils.Config) http.HandlerFunc {
 			http.Error(w, "failed to fetch moods", http.StatusInternalServerError)
 			return
 		}
+
+		// 🔔 Optional: notify that user viewed mood history
+		utils.PublishNotification(utils.Rdb, "mood_events", utils.NotificationEvent{
+			UserID:        userID,
+			Title:         "Mood History Viewed",
+			Message:       "You checked your mood history.",
+			SourceService: "mood-service",
+			Action:        "MOOD_HISTORY_FETCH",
+			Meta: map[string]interface{}{
+				"mood_count": len(moods),
+			},
+		})
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": true,

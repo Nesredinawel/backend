@@ -3,31 +3,59 @@ package utils
 import (
 	"log"
 	"os"
+	"strconv"
+	"strings"
 )
 
 type Config struct {
+	// 🗄️ Hasura
 	HasuraEndpoint    string
 	HasuraAdminSecret string
-	JWTSecret         string
-	Port              string
+
+	// 🔐 JWT
+	JWTSecret string
+
+	// 🧠 Redis
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
+
+	// ⚙️ Service Port
+	Port string
 }
 
-func LoadConfig() (Config, error) {
+// LoadConfig loads environment variables and initializes Redis automatically
+func LoadConfig() Config {
+	dbIndex := 0
+	if envDB := os.Getenv("REDIS_DB"); envDB != "" {
+		if v, err := strconv.Atoi(envDB); err == nil {
+			dbIndex = v
+		}
+	}
+
 	cfg := Config{
 		HasuraEndpoint:    os.Getenv("HASURA_GRAPHQL_ENDPOINT"),
 		HasuraAdminSecret: os.Getenv("HASURA_GRAPHQL_ADMIN_SECRET"),
-		JWTSecret:         os.Getenv("JWT_SECRET"), // same as auth-service
-		Port:              os.Getenv("PORT_2"),     // default mood-service port
+		JWTSecret:         os.Getenv("JWT_SECRET"),
+		Port:              os.Getenv("PORT_2"),
+		RedisAddr:         os.Getenv("REDIS_ADDR"),
+		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
+		RedisDB:           dbIndex,
 	}
 
-	if cfg.HasuraEndpoint == "" || cfg.HasuraAdminSecret == "" {
-		log.Println("⚠️ WARNING: Hasura endpoint or admin secret missing")
-	}
-
+	// Defaults
 	if cfg.Port == "" {
 		cfg.Port = "8082"
 	}
+	if cfg.RedisAddr == "" || strings.HasPrefix(cfg.RedisAddr, "localhost") {
+		log.Println("⚠️ Redis address missing or localhost, switching to Docker service 'redis:6379'")
+		cfg.RedisAddr = "redis:6379"
+	}
 
 	log.Printf("[mood-service] Loaded config: %+v\n", cfg)
-	return cfg, nil
+
+	// Initialize global Redis automatically
+	InitRedis(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+
+	return cfg
 }

@@ -14,16 +14,17 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// Redis client (initialized with Docker service name)
+// Redis client (Docker service name used)
 var rdb = redis.NewClient(&redis.Options{
-	Addr: "redis:6379", // Docker service name in docker-compose
+	Addr: "redis:6379",
 })
 
 // ===========================================
-// 📧 STEP 1: Signup → Send verification email or add password to Google user
+// 📧 STEP 1: Signup → Send verification email or link Google user
 // ===========================================
 func EmailSignup(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+
 		var req struct {
 			Name     string `json:"name"`
 			Email    string `json:"email"`
@@ -39,15 +40,16 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 		// 🔍 Check if user already exists
 		existingUser, err := utils.GetUserByEmail(cfg, req.Email)
 		if err == nil && existingUser.ID != "" {
-			// ✅ Case: existing Google user adding password (local login)
+
+			// Google user with no password → add password
 			if existingUser.Provider == "google" && existingUser.Password == "" {
+
 				hash, err := utils.HashPassword(req.Password)
 				if err != nil {
 					http.Error(w, "failed to hash password", http.StatusInternalServerError)
 					return
 				}
 
-				// Update password & provider to support both logins
 				_, err = utils.UpdateUserPasswordAndProvider(cfg, existingUser.ID, hash, "local")
 				if err != nil {
 					log.Printf("❌ failed to update password for Google user: %v", err)
@@ -55,19 +57,29 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 					return
 				}
 
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]string{
-					"message": "✅ Password added successfully. You can now log in with Google or email.",
+				// 📢 Notify
+				utils.PublishNotification(rdb, "auth_events", utils.NotificationEvent{
+					UserID:        existingUser.ID,
+					Title:         "Password Added",
+					Message:       fmt.Sprintf("Password linked to Google account %s", existingUser.Email),
+					SourceService: "auth-service",
+					Action:        "PASSWORD_LINKED",
+					Meta: map[string]interface{}{
+						"email": existingUser.Email,
+					},
+				})
+
+				jsonResponse(w, map[string]string{
+					"message": "Password added successfully. You can now login using email or Google.",
 				})
 				return
 			}
 
-			// 🚫 User already exists (not upgradable)
 			http.Error(w, "user already exists", http.StatusConflict)
 			return
 		}
 
-		// 🆕 New signup flow → send verification email
+		// 🆕 New signup → email verification
 		hash, err := utils.HashPassword(req.Password)
 		if err != nil {
 			http.Error(w, "failed to hash password", http.StatusInternalServerError)
@@ -80,12 +92,12 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		// Save pending signup temporarily in Redis
 		pending := utils.PendingSignup{
 			Name:         req.Name,
 			Email:        req.Email,
 			PasswordHash: hash,
 		}
+
 		if err := utils.SavePendingSignup(rdb, token, pending, 15*time.Minute); err != nil {
 			http.Error(w, "failed to store verification data", http.StatusInternalServerError)
 			return
@@ -94,33 +106,42 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 		verifyURL := fmt.Sprintf("%s/auth/email/verify?token=%s", cfg.PublicBaseURL, token)
 		log.Println("🔗 Verification URL:", verifyURL)
 
-		// Send verification email
 		if err := utils.SendVerificationEmail(cfg.ResendAPIKey, req.Email, verifyURL); err != nil {
 			log.Printf("❌ Failed to send verification email: %v", err)
 			http.Error(w, "failed to send email", http.StatusInternalServerError)
 			return
 		}
 
-		resp := map[string]string{
-			"message": "✅ Check your email to confirm signup. Link valid for 15 minutes.",
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		// 📢 Notify
+		utils.PublishNotification(rdb, "auth_events", utils.NotificationEvent{
+			UserID:        "pending",
+			Title:         "Signup Started",
+			Message:       fmt.Sprintf("Signup initiated for %s", req.Email),
+			SourceService: "auth-service",
+			Action:        "SIGNUP_INITIATED",
+			Meta: map[string]interface{}{
+				"email": req.Email,
+			},
+		})
+
+		jsonResponse(w, map[string]string{
+			"message": "Check your email to confirm signup. Link valid for 15 minutes.",
+		})
 	}
 }
 
 // ===========================================
-// 📨 STEP 2: Email verify → Create user or link to existing Google user
+// 📨 STEP 2: Email verify
 // ===========================================
 func EmailVerify(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+
 		token := r.URL.Query().Get("token")
 		if token == "" {
 			http.Error(w, "missing token", http.StatusBadRequest)
 			return
 		}
 
-		// Retrieve pending signup
 		pending, err := utils.GetPendingSignup(rdb, token)
 		if err != nil {
 			http.Error(w, "invalid or expired verification token", http.StatusUnauthorized)
@@ -128,27 +149,38 @@ func EmailVerify(cfg utils.Config) http.HandlerFunc {
 		}
 		utils.DeletePendingSignup(rdb, token)
 
-		// 🔍 Check if user already exists (e.g., signed up via Google)
 		existingUser, err := utils.GetUserByEmail(cfg, pending.Email)
 		if err == nil && existingUser.ID != "" {
+
+			// Google user being upgraded to local+password
 			if existingUser.Provider == "google" && existingUser.Password == "" {
-				// Upgrade Google user with password
+
 				_, err := utils.UpdateUserPasswordAndProvider(cfg, existingUser.ID, pending.PasswordHash, "local")
 				if err != nil {
-					http.Error(w, "failed to link password to Google user", http.StatusInternalServerError)
+					http.Error(w, "failed to link password", http.StatusInternalServerError)
 					return
 				}
 
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]string{
-					"message": "🎉 Email verified! Password linked to your Google account.",
+				utils.PublishNotification(rdb, "auth_events", utils.NotificationEvent{
+					UserID:        existingUser.ID,
+					Title:         "Email Verified",
+					Message:       fmt.Sprintf("Email verified and password linked for %s", pending.Email),
+					SourceService: "auth-service",
+					Action:        "EMAIL_VERIFIED_LINKED",
+					Meta: map[string]interface{}{
+						"email": pending.Email,
+					},
+				})
+
+				jsonResponse(w, map[string]string{
+					"message": "Email verified! Password linked to Google account.",
 					"user_id": existingUser.ID,
 				})
 				return
 			}
 		}
 
-		// ✨ Otherwise, create a new user
+		// Create new user
 		user := models.User{
 			Email:    pending.Email,
 			Name:     pending.Name,
@@ -159,19 +191,28 @@ func EmailVerify(cfg utils.Config) http.HandlerFunc {
 
 		userID, err := utils.UpsertUserInHasura(cfg, user)
 		if err != nil {
-			log.Printf("❌ Failed to insert verified user: %v", err)
+			log.Printf("❌ Failed to insert user: %v", err)
 			http.Error(w, "failed to create user", http.StatusInternalServerError)
 			return
 		}
 
 		utils.CreateEmptyUserProfile(cfg, userID)
 
-		resp := map[string]string{
-			"message": "🎉 Email verified successfully. You can now log in.",
+		utils.PublishNotification(rdb, "auth_events", utils.NotificationEvent{
+			UserID:        userID,
+			Title:         "Email Verified",
+			Message:       fmt.Sprintf("Email verified successfully for %s", pending.Email),
+			SourceService: "auth-service",
+			Action:        "EMAIL_VERIFIED",
+			Meta: map[string]interface{}{
+				"email": pending.Email,
+			},
+		})
+
+		jsonResponse(w, map[string]string{
+			"message": "Email verified successfully.",
 			"user_id": userID,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		})
 	}
 }
 
@@ -180,6 +221,7 @@ func EmailVerify(cfg utils.Config) http.HandlerFunc {
 // ===========================================
 func EmailLogin(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+
 		var req struct {
 			Email    string `json:"email"`
 			Password string `json:"password"`
@@ -190,16 +232,14 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 		}
 
 		req.Email = strings.TrimSpace(strings.ToLower(req.Email))
-
 		user, err := utils.GetUserByEmail(cfg, req.Email)
 		if err != nil {
 			http.Error(w, "user not found", http.StatusUnauthorized)
 			return
 		}
 
-		// If user came from Google but has no password
 		if user.Provider == "google" && user.Password == "" {
-			http.Error(w, "this account uses Google login, not email/password", http.StatusForbidden)
+			http.Error(w, "this account uses Google login", http.StatusForbidden)
 			return
 		}
 
@@ -214,7 +254,20 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		resp := map[string]interface{}{
+		// Notify login
+		utils.PublishNotification(rdb, "auth_events", utils.NotificationEvent{
+			UserID:        user.ID,
+			Title:         "Login Successful",
+			Message:       fmt.Sprintf("%s logged in successfully", user.Email),
+			SourceService: "auth-service",
+			Action:        "USER_LOGIN",
+			Meta: map[string]interface{}{
+				"email":    user.Email,
+				"provider": user.Provider,
+			},
+		})
+
+		jsonResponse(w, map[string]interface{}{
 			"access_token":  session.AccessToken,
 			"refresh_token": session.RefreshToken,
 			"expires_in":    session.ExpiresIn,
@@ -225,8 +278,12 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 				"provider": user.Provider,
 				"role":     user.Role,
 			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		})
 	}
+}
+
+// Helper JSON writer
+func jsonResponse(w http.ResponseWriter, body interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(body)
 }
