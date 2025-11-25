@@ -34,6 +34,7 @@ func handleIncomingEvent(msg *redis.Message) {
 		return
 	}
 
+	// Auto-fill title if missing
 	if ev.Title == "" {
 		switch ev.SourceService {
 		case "auth-service":
@@ -48,16 +49,19 @@ func handleIncomingEvent(msg *redis.Message) {
 		log.Printf("[Redis][%s] 📝 Auto-filled title: %s", correlationID, ev.Title)
 	}
 
+	// Validate required fields
 	if ev.UserID == "" || ev.Message == "" {
 		log.Printf("[Redis][%s] ⚠️ Missing user_id or message in event: %+v", correlationID, ev)
 		return
 	}
 
+	// Timestamp logic
 	ts := time.Now().UTC()
 	if ev.Timestamp != nil {
 		ts = *ev.Timestamp
 	}
 
+	// Create Notification object
 	n := models.Notification{
 		ID:            uuid.New().String(),
 		UserID:        ev.UserID,
@@ -72,17 +76,39 @@ func handleIncomingEvent(msg *redis.Message) {
 
 	log.Printf("[Redis][%s] 💾 Notification object created: %+v", correlationID, n)
 
+	// Save in memory
 	services.AddNotification(n)
 	log.Printf("[Redis][%s] 🔔 Added to in-memory store", correlationID)
 
+	// Persist to Hasura (async)
 	go services.PersistNotificationToHasura(n)
 	log.Printf("[Redis][%s] 💻 Persisting to Hasura (async)", correlationID)
 
+	// Push notification (async)
 	go services.SendPushNotification(n)
 	log.Printf("[Redis][%s] 📲 Sending push notification (async)", correlationID)
 
-	go services.SendEmailNotification(n, "user@example.com")
-	log.Printf("[Redis][%s] ✉️ Sending email notification (async)", correlationID)
+	// -----------------------------
+	//  Extract EMAIL from Meta
+	// -----------------------------
+	var email string
+	if ev.Meta != nil {
+		if metaMap, ok := ev.Meta.(map[string]interface{}); ok {
+			if value, found := metaMap["email"]; found {
+				if emailStr, ok := value.(string); ok {
+					email = emailStr
+				}
+			}
+		}
+	}
 
-	log.Printf("[Redis][%s] 📨 Notification processing completed for user=%s | title=%s", correlationID, n.UserID, n.Title)
+	if email == "" {
+		log.Printf("[Redis][%s] ⚠️ No email found in Meta. Email notification skipped.", correlationID)
+	} else {
+		go services.SendEmailNotification(n, email)
+		log.Printf("[Redis][%s] ✉️ Sending email notification to: %s (async)", correlationID, email)
+	}
+
+	log.Printf("[Redis][%s] 📨 Notification processing completed for user=%s | title=%s",
+		correlationID, n.UserID, n.Title)
 }
