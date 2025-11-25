@@ -4,9 +4,11 @@ import (
 	"log"
 	"net/http"
 
+	"auth-service/handlers"
 	"auth-service/routes"
 	"auth-service/utils"
-	"auth-service/handlers"
+
+	"github.com/rs/cors" // import CORS package
 )
 
 func main() {
@@ -26,7 +28,19 @@ func main() {
 	// Print routes info
 	routes.PrintRoutes(cfg)
 
+	// -------------------------------
+	// Wrap router with CORS middleware
+	// -------------------------------
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:8085"}, // allow API Docs UI
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: true,
+	})
+	handler := c.Handler(r)
+
 	// Start server
 	port := cfg.Port
-	log.Fatal(http.ListenAndServe(":"+port, r))
+	log.Printf("🚀 Auth service running on :%s", port)
+	log.Fatal(http.ListenAndServe(":"+port, handler))
 }

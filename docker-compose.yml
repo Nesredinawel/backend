@@ -126,6 +126,17 @@ services:
     networks:
       - backend_net
 
+  api-docs-service:
+    build:
+      context: ./api-docs-service
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./api-docs-service/docs:/root/docs:ro  # Mount your docs folder
+    networks:
+      - backend_net
+
+
 volumes:
   pgdata:
 

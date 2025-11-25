@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"auth-service/email"
 	"auth-service/models"
 	"auth-service/utils"
 
@@ -106,7 +107,9 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 		verifyURL := fmt.Sprintf("%s/auth/email/verify?token=%s", cfg.PublicBaseURL, token)
 		log.Println("🔗 Verification URL:", verifyURL)
 
-		if err := utils.SendVerificationEmail(cfg.ResendAPIKey, req.Email, verifyURL); err != nil {
+		provider := email.NewEmailProvider()
+
+		if err := provider.SendVerificationEmail(req.Email, verifyURL); err != nil {
 			log.Printf("❌ Failed to send verification email: %v", err)
 			http.Error(w, "failed to send email", http.StatusInternalServerError)
 			return
