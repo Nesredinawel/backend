@@ -259,13 +259,18 @@ paths:
                   created_at: { type: string }
                   updated_at: { type: string }
 
+  paths:
   ####################################################
-  # MOOD TRACKING SERVICE
+  # MOOD SERVICE (PORT 8082)
   ####################################################
-  /mood/track:
+  /api/v1/moods:
     post:
       tags: [Mood]
-      summary: Track today's mood
+      summary: Create or update today's mood
+      servers:
+        - url: http://localhost:8082
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -273,17 +278,112 @@ paths:
             schema:
               type: object
               properties:
-                mood_level: { type: integer }
-                emoji: { type: string }
+                mood:
+                  type: string
+                  example: "very good"
+                mood_score:
+                  type: integer
+                  example: 10
+                note:
+                  type: string
+                  example: "Had a productive day"
       responses:
-        "201": { description: Mood tracked }
+        "200":
+          description: Mood saved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  mood_id: { type: string, example: "123e4567-e89b-12d3-a456-426614174000" }
+                  message: { type: string, example: "Mood saved successfully (updated if already exists for today)" }
 
-  /mood/history:
     get:
       tags: [Mood]
-      summary: Get mood tracking history
+      summary: Get all moods for authenticated user
+      servers:
+        - url: http://localhost:8082
+      security:
+        - bearerAuth: []
       responses:
-        "200": { description: Mood history returned }
+        "200":
+          description: List of moods returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  moods:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, example: "123e4567-e89b-12d3-a456-426614174000" }
+                        mood: { type: string, example: "very good" }
+                        mood_score: { type: integer, example: 10 }
+                        note: { type: string, example: "Had a productive day" }
+                        created_at: { type: string, format: date-time, example: "2025-11-25T12:34:56Z" }
+
+  /api/v1/moods/analytics:
+    get:
+      tags: [Mood]
+      summary: Get mood analytics (weekly, monthly, or custom range)
+      servers:
+        - url: http://localhost:8082
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: range
+          in: query
+          required: false
+          description: "Analytics range (week or month)"
+          schema:
+            type: string
+            enum: [week, month]
+        - name: from
+          in: query
+          required: false
+          description: "Start date (YYYY-MM-DD)"
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: "End date (YYYY-MM-DD)"
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Analytics returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  from: { type: string, example: "2025-11-01" }
+                  to: { type: string, example: "2025-11-07" }
+                  avg_score: { type: number, example: 3.5 }
+                  total_entries: { type: integer, example: 7 }
+                  counts_by_mood:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        mood: { type: string, example: "very good" }
+                        count: { type: integer, example: 10 }
+                  time_series:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date: { type: string, format: date, example: "2025-11-01" }
+                        avg_score: { type: number, example: 4.0 }
+                        count: { type: integer, example: 1 }
 
   ####################################################
   # BLOG SERVICE
