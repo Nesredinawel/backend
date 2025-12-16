@@ -32,7 +32,7 @@ func main() {
 	// Wrap router with CORS middleware
 	// -------------------------------
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:8085"}, // allow API Docs UI
+		AllowedOrigins:   []string{"http://localhost:8081"}, // allow API Docs UI
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,

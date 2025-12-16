@@ -24,7 +24,7 @@ func main() {
 	// Wrap router with CORS middleware
 	// -------------------------------
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:8085"}, // allow Swagger UI or frontend
+		AllowedOrigins:   []string{"http://localhost:8081"}, // allow Swagger UI or frontend
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,

@@ -1,6 +1,9 @@
 version: "3.8"
 
 services:
+  # =========================
+  # 🗄️ Database
+  # =========================
   postgres:
     image: postgres:15
     restart: always
@@ -9,19 +12,22 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - "5432:5432"
+      - "5432:5432" # keep exposed for local dev
     volumes:
       - ./migrations:/docker-entrypoint-initdb.d
       - pgdata:/var/lib/postgresql/data
     networks:
       - backend_net
 
+  # =========================
+  # 🧠 Hasura
+  # =========================
   hasura:
     image: hasura/graphql-engine:v2.37.0
     depends_on:
       - postgres
     ports:
-      - "8080:8080"
+      - "8080:8080" # Hasura console
     environment:
       HASURA_GRAPHQL_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       HASURA_GRAPHQL_ADMIN_SECRET: ${HASURA_GRAPHQL_ADMIN_SECRET}
@@ -33,6 +39,9 @@ services:
     networks:
       - backend_net
 
+  # =========================
+  # 🧰 PgAdmin
+  # =========================
   pgadmin:
     image: dpage/pgadmin4:7
     environment:
@@ -45,23 +54,28 @@ services:
     networks:
       - backend_net
 
+  # =========================
+  # 🔴 Redis
+  # =========================
   redis:
     image: redis:7
-    container_name: redis
-    ports:
-      - "6379:6379"
     restart: always
+    ports:
+      - "6379:6379" # optional for dev
     networks:
       - backend_net
 
+  # =========================
+  # 🔑 Auth Service (internal)
+  # =========================
   auth-service:
     build:
       context: ./auth-service
       dockerfile: Dockerfile
     env_file:
       - .env
-    ports:
-      - "8081:8081"
+    expose:
+      - "8081"
     depends_on:
       - hasura
       - postgres
@@ -69,14 +83,17 @@ services:
     networks:
       - backend_net
 
+  # =========================
+  # 😊 Mood Service (internal)
+  # =========================
   mood-service:
     build:
       context: ./mood-service
       dockerfile: Dockerfile
     env_file:
       - .env
-    ports:
-      - "8082:8082"
+    expose:
+      - "8082"
     depends_on:
       - hasura
       - postgres
@@ -85,14 +102,17 @@ services:
     networks:
       - backend_net
 
+  # =========================
+  # 📝 Blog Service (internal)
+  # =========================
   blog-service:
     build:
       context: ./blog-service
       dockerfile: Dockerfile
     env_file:
       - .env
-    ports:
-      - "8083:8083"
+    expose:
+      - "8083"
     depends_on:
       - hasura
       - postgres
@@ -101,14 +121,17 @@ services:
     networks:
       - backend_net
 
+  # =========================
+  # 🔔 Notification Service (internal)
+  # =========================
   notification-service:
     build:
       context: ./notification-service
       dockerfile: Dockerfile
     env_file:
       - .env
-    ports:
-      - "8084:8084"
+    expose:
+      - "8084"
     depends_on:
       - redis
       - hasura
@@ -126,20 +149,46 @@ services:
     networks:
       - backend_net
 
+  # =========================
+  # 📘 API Docs (internal)
+  # =========================
   api-docs-service:
     build:
       context: ./api-docs-service
-    ports:
-      - "8085:8085"
+    expose:
+      - "8085"
     volumes:
-      - ./api-docs-service/docs:/root/docs:ro  # Mount your docs folder
+      - ./api-docs-service/docs:/root/docs:ro
     networks:
       - backend_net
 
+  # =========================
+  # 🚪 API Gateway (ONLY PUBLIC PORT)
+  # =========================
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8081"
+    depends_on:
+      - auth-service
+      - mood-service
+      - blog-service
+      - notification-service
+      - api-docs-service
+    networks:
+      - backend_net
 
+# =========================
+# 📦 Volumes
+# =========================
 volumes:
   pgdata:
 
+# =========================
+# 🌐 Network
+# =========================
 networks:
   backend_net:
     driver: bridge

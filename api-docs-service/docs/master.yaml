@@ -1,10 +1,12 @@
 openapi: 3.0.3
+
 info:
   title: My Platform API
   version: 1.0.0
 
+# 🚪 API Gateway (ONLY entry point)
 servers:
-  - url: http://localhost:8085
+  - url: http://localhost:8081
 
 tags:
   - name: Auth
@@ -23,20 +25,20 @@ components:
       scheme: bearer
       bearerFormat: JWT
 
-# Apply security globally (all endpoints require bearer token unless overridden)
+# 🔐 Default: all endpoints require JWT unless overridden
 security:
   - bearerAuth: []
 
 paths:
 
-  # Health check (no auth)
+  ####################################################
+  # HEALTH
+  ####################################################
   /healthz:
     get:
       tags: [Auth]
-      summary: Health check endpoint
-      servers:
-        - url: http://localhost:8081
-      security: []  # override global auth, open endpoint
+      summary: Health check
+      security: []
       responses:
         "200":
           description: Service is healthy
@@ -46,14 +48,14 @@ paths:
                 type: string
                 example: ok
 
-  # Email Signup (no auth)
+  ####################################################
+  # AUTH SERVICE
+  ####################################################
   /auth/email/signup:
     post:
       tags: [Auth]
-      summary: Signup with email and password (sends verification email)
-      servers:
-        - url: http://localhost:8081
-      security: []  # override global auth
+      summary: Signup with email & password
+      security: []
       requestBody:
         required: true
         content:
@@ -62,54 +64,31 @@ paths:
               type: object
               required: [name, email, password]
               properties:
-                name: { type: string, example: suzz Doe }
+                name: { type: string, example: Suzz Doe }
                 email: { type: string, example: suzzcreative@example.com }
-                password: { type: string, example: SuzzPassword123 }
+                password: { type: string, example: StrongPassword123 }
       responses:
         "201":
           description: Signup initiated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message:
-                    type: string
-                    example: Check your email to confirm signup. Link valid for 15 minutes.
 
-  # Email Verify (no auth)
   /auth/email/verify:
     get:
       tags: [Auth]
-      summary: Verify email using token
-      servers:
-        - url: http://localhost:8081
+      summary: Verify email
       security: []
       parameters:
         - name: token
           in: query
           required: true
-          schema:
-            type: string
-          description: Verification token sent to email
+          schema: { type: string }
       responses:
         "200":
-          description: Email verified successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  message: { type: string }
-                  user_id: { type: string }
+          description: Email verified
 
-  # Email Login (no auth)
   /auth/email/login:
     post:
       tags: [Auth]
-      summary: Login using email and password
-      servers:
-        - url: http://localhost:8081
+      summary: Login with email & password
       security: []
       requestBody:
         required: true
@@ -119,8 +98,8 @@ paths:
               type: object
               required: [email, password]
               properties:
-                email: { type: string, example: suzzcreative@example.com }
-                password: { type: string, example: StrongPassword123 }
+                email: { type: string }
+                password: { type: string }
       responses:
         "200":
           description: Login successful
@@ -131,111 +110,45 @@ paths:
                 properties:
                   access_token: { type: string }
                   refresh_token: { type: string }
-                  expires_in: { type: integer, example: 3600 }
-                  user:
-                    type: object
-                    properties:
-                      user_id: { type: string }
-                      email: { type: string }
-                      name: { type: string }
-                      provider: { type: string }
-                      role: { type: string }
+                  expires_in: { type: integer }
 
-  # Google OAuth (no auth)
   /auth/google/login:
     get:
       tags: [Auth]
-      summary: Redirect to Google login
-      servers:
-        - url: http://localhost:8081
+      summary: Google OAuth login
       security: []
       responses:
         "302":
-          description: Redirect to Google consent screen
+          description: Redirect to Google
 
   /auth/google/callback:
     get:
       tags: [Auth]
       summary: Google OAuth callback
-      servers:
-        - url: http://localhost:8081
       security: []
       parameters:
         - name: code
           in: query
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         "200":
-          description: Login successful via Google
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  access_token: { type: string }
-                  refresh_token: { type: string }
-                  expires_in: { type: integer }
-                  user:
-                    type: object
-                    properties:
-                      user_id: { type: string }
-                      email: { type: string }
-                      name: { type: string }
-                      avatar: { type: string }
-                      provider: { type: string }
-                      role: { type: string }
+          description: Google login success
 
-  # ==============================
-  # User Profile (Protected)
-  # ==============================
-   # ==============================
-  # User Profile (Protected)
-  # ==============================
+  ####################################################
+  # USER PROFILE (JWT REQUIRED)
+  ####################################################
   /user/profile:
     get:
       tags: [Auth]
-      summary: Get authenticated user's profile
-      servers:
-        - url: http://localhost:8081
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: token
-          in: query
-          required: true
-          description: JWT access token (for Swagger UI input)
-          schema:
-            type: string
+      summary: Get my profile
       responses:
         "200":
-          description: Returns user profile
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  user_id: { type: string }
-                  bio: { type: string, nullable: true }
-                  custom_avatar_url: { type: string, nullable: true }
-                  created_at: { type: string }
-                  updated_at: { type: string }
-    
+          description: User profile returned
+
     put:
       tags: [Auth]
-      summary: Update authenticated user's profile
-      servers:
-        - url: http://localhost:8081
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: token
-          in: query
-          required: true
-          description: JWT access token (for Swagger UI input)
-          schema:
-            type: string
+      summary: Update my profile
       requestBody:
         required: true
         content:
@@ -243,34 +156,19 @@ paths:
             schema:
               type: object
               properties:
-                bio: { type: string, example: "I am a Go developer" }
-                custom_avatar_url: { type: string, example: "https://example.com/avatar.png" }
+                bio: { type: string }
+                custom_avatar_url: { type: string }
       responses:
         "200":
-          description: Updated profile returned
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  user_id: { type: string }
-                  bio: { type: string, nullable: true }
-                  custom_avatar_url: { type: string, nullable: true }
-                  created_at: { type: string }
-                  updated_at: { type: string }
+          description: Profile updated
 
-  paths:
   ####################################################
-  # MOOD SERVICE (PORT 8082)
+  # MOOD SERVICE
   ####################################################
   /api/v1/moods:
     post:
       tags: [Mood]
       summary: Create or update today's mood
-      servers:
-        - url: http://localhost:8082
-      security:
-        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -278,112 +176,33 @@ paths:
             schema:
               type: object
               properties:
-                mood:
-                  type: string
-                  example: "very good"
-                mood_score:
-                  type: integer
-                  example: 10
-                note:
-                  type: string
-                  example: "Had a productive day"
+                mood: { type: string }
+                mood_score: { type: integer }
+                note: { type: string }
       responses:
         "200":
-          description: Mood saved successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success: { type: boolean, example: true }
-                  mood_id: { type: string, example: "123e4567-e89b-12d3-a456-426614174000" }
-                  message: { type: string, example: "Mood saved successfully (updated if already exists for today)" }
+          description: Mood saved
 
     get:
       tags: [Mood]
-      summary: Get all moods for authenticated user
-      servers:
-        - url: http://localhost:8082
-      security:
-        - bearerAuth: []
+      summary: Get my moods
       responses:
         "200":
-          description: List of moods returned
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success: { type: boolean, example: true }
-                  moods:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id: { type: string, example: "123e4567-e89b-12d3-a456-426614174000" }
-                        mood: { type: string, example: "very good" }
-                        mood_score: { type: integer, example: 10 }
-                        note: { type: string, example: "Had a productive day" }
-                        created_at: { type: string, format: date-time, example: "2025-11-25T12:34:56Z" }
+          description: Mood list returned
 
   /api/v1/moods/analytics:
     get:
       tags: [Mood]
-      summary: Get mood analytics (weekly, monthly, or custom range)
-      servers:
-        - url: http://localhost:8082
-      security:
-        - bearerAuth: []
+      summary: Mood analytics
       parameters:
         - name: range
           in: query
-          required: false
-          description: "Analytics range (week or month)"
           schema:
             type: string
             enum: [week, month]
-        - name: from
-          in: query
-          required: false
-          description: "Start date (YYYY-MM-DD)"
-          schema:
-            type: string
-            format: date
-        - name: to
-          in: query
-          required: false
-          description: "End date (YYYY-MM-DD)"
-          schema:
-            type: string
-            format: date
       responses:
         "200":
           description: Analytics returned
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success: { type: boolean, example: true }
-                  from: { type: string, example: "2025-11-01" }
-                  to: { type: string, example: "2025-11-07" }
-                  avg_score: { type: number, example: 3.5 }
-                  total_entries: { type: integer, example: 7 }
-                  counts_by_mood:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        mood: { type: string, example: "very good" }
-                        count: { type: integer, example: 10 }
-                  time_series:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        date: { type: string, format: date, example: "2025-11-01" }
-                        avg_score: { type: number, example: 4.0 }
-                        count: { type: integer, example: 1 }
 
   ####################################################
   # BLOG SERVICE
@@ -393,7 +212,7 @@ paths:
       tags: [Blog]
       summary: List blog posts
       responses:
-        "200": { description: List of posts }
+        "200": { description: OK }
 
     post:
       tags: [Blog]
@@ -408,19 +227,19 @@ paths:
                 title: { type: string }
                 content: { type: string }
       responses:
-        "201": { description: Post created }
+        "201": { description: Created }
 
   /blog/{id}:
     get:
       tags: [Blog]
-      summary: Get blog post by ID
+      summary: Get blog post
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string }
       responses:
-        "200": { description: Post retrieved }
+        "200": { description: OK }
 
     put:
       tags: [Blog]
@@ -430,17 +249,8 @@ paths:
           in: path
           required: true
           schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                title: { type: string }
-                content: { type: string }
       responses:
-        "200": { description: Post updated }
+        "200": { description: Updated }
 
     delete:
       tags: [Blog]
@@ -451,25 +261,21 @@ paths:
           required: true
           schema: { type: string }
       responses:
-        "200": { description: Post deleted }
+        "200": { description: Deleted }
 
   ####################################################
-  # NOTIFICATION SERVICE
+  # NOTIFICATIONS
   ####################################################
   /notifications:
     get:
       tags: [Notifications]
-      summary: Get user notifications
-      security:
-        - bearerAuth: []
+      summary: Get notifications
       responses:
-        "200": { description: Notifications returned }
+        "200": { description: OK }
 
   /notifications/mark-read:
     post:
       tags: [Notifications]
       summary: Mark notifications as read
-      security:
-        - bearerAuth: []
       responses:
-        "200": { description: Notifications marked as read }
+        "200": { description: Updated }
