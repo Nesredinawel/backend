@@ -1,14 +1,15 @@
 package handlers
 
 import (
-	"fmt"
+	"context"
+	"encoding/json"
 	"log"
 	"net/http"
-	"time"
 
 	"auth-service/models"
 	"auth-service/utils"
 
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -30,27 +31,69 @@ func InitGoogleOAuth(cfg utils.Config) {
 
 func GoogleLogin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/auth/google/callback?code=demo_code_123", http.StatusTemporaryRedirect)
+		if oauthConfig == nil {
+			writeServerError(w, "Google OAuth is not configured.")
+			return
+		}
+		state := uuid.New().String()
+		url := oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
+		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 	}
 }
 
 func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		email := fmt.Sprintf("google.demo.%d@example.com", time.Now().Unix())
-		name := "Demo Google User"
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			writeBadRequest(w, "Missing authorization code.")
+			return
+		}
+
+		token, err := oauthConfig.Exchange(context.Background(), code)
+		if err != nil {
+			log.Printf("Google token exchange error: %v", err)
+			writeServerError(w, "Failed to authenticate with Google. Please try again.")
+			return
+		}
+
+		client := oauthConfig.Client(context.Background(), token)
+		resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
+		if err != nil {
+			log.Printf("Google userinfo fetch error: %v", err)
+			writeServerError(w, "Failed to fetch user info from Google.")
+			return
+		}
+		defer resp.Body.Close()
+
+		var googleUser struct {
+			ID      string `json:"id"`
+			Email   string `json:"email"`
+			Name    string `json:"name"`
+			Picture string `json:"picture"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&googleUser); err != nil {
+			log.Printf("Google userinfo decode error: %v", err)
+			writeServerError(w, "Failed to process Google user data.")
+			return
+		}
+
+		if googleUser.Email == "" {
+			writeServerError(w, "Google account has no email associated.")
+			return
+		}
 
 		user := models.User{
-			Email:      email,
-			Name:       name,
-			AvatarURL:  "https://api.dicebear.com/7.x/avataaars/svg?seed=demo",
+			Email:      googleUser.Email,
+			Name:       googleUser.Name,
+			AvatarURL:  googleUser.Picture,
 			Provider:   "google",
-			ProviderID: "demo_google_id",
+			ProviderID: googleUser.ID,
 			Role:       "user",
 		}
 
-		userID, err := utils.UpsertUserInHasura(cfg, user)
-		if err != nil {
-			log.Printf("Google user upsert error: %v", err)
+		userID, svcErr := utils.UpsertUserInHasura(cfg, user)
+		if svcErr != nil {
+			log.Printf("Google user upsert error: %v", svcErr)
 			writeServerError(w, "Failed to authenticate with Google. Please try again.")
 			return
 		}
@@ -74,9 +117,9 @@ func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 			"expires_in":    session.ExpiresIn,
 			"user": map[string]interface{}{
 				"user_id":    userID,
-				"email":      email,
-				"name":       name,
-				"avatar_url": nullIfEmpty(user.AvatarURL),
+				"email":      googleUser.Email,
+				"name":       googleUser.Name,
+				"avatar_url": nullIfEmpty(googleUser.Picture),
 				"provider":   "google",
 				"role":       "user",
 			},
