@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS auth_service.users (
 -- User profiles table
 CREATE TABLE IF NOT EXISTS auth_service.user_profiles (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id uuid REFERENCES auth_service.users(id) ON DELETE CASCADE,
+    user_id uuid UNIQUE REFERENCES auth_service.users(id) ON DELETE CASCADE,
     bio text,
     custom_avatar_url text,
     created_at timestamptz DEFAULT now(),

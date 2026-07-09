@@ -10,19 +10,27 @@ import (
 	"blog-service/models"
 )
 
-// =========================
-// Blog Post Operations
-// =========================
-
-// InsertPost inserts a new blog post with related images
 func InsertPost(cfg Config, post models.Post) (string, error) {
 	query := `
-	mutation InsertBlog($user_id: uuid!, $title: String!, $content: String!, $tags: jsonb, $published: Boolean!, $images: [blog_service_blogs_images_insert_input!]!) {
+	mutation InsertBlog(
+		$user_id: uuid!,
+		$title: String!,
+		$content: String!,
+		$excerpt: String,
+		$category: String,
+		$tags: jsonb,
+		$read_time: Int,
+		$published: Boolean!,
+		$images: [blog_service_blogs_images_insert_input!]!
+	) {
 	  insert_blog_service_blogs_one(object: {
 	    user_id: $user_id,
 	    title: $title,
 	    content: $content,
+	    excerpt: $excerpt,
+	    category: $category,
 	    tags: $tags,
+	    read_time: $read_time,
 	    published: $published,
 	    blogs_images: { data: $images }
 	  }) {
@@ -38,11 +46,23 @@ func InsertPost(cfg Config, post models.Post) (string, error) {
 		})
 	}
 
+	cat := post.Category
+	if cat == "" {
+		cat = "general"
+	}
+	readTime := post.ReadTime
+	if readTime < 1 {
+		readTime = 1
+	}
+
 	variables := map[string]interface{}{
 		"user_id":   post.UserID,
 		"title":     post.Title,
 		"content":   post.Content,
+		"excerpt":   post.Excerpt,
+		"category":  cat,
 		"tags":      post.Tags,
+		"read_time": readTime,
 		"published": post.Published,
 		"images":    imageData,
 	}
@@ -87,16 +107,49 @@ func InsertPost(cfg Config, post models.Post) (string, error) {
 	return respData.Data.InsertBlogServiceBlogsOne.ID, nil
 }
 
-// GetPosts fetches all blog posts with images (optionally only published)
-func GetPosts(cfg Config, onlyPublished bool) ([]models.Post, error) {
-	query := `
-	query GetPosts($published: Boolean) {
-	  blog_service_blogs(where: {published: {_eq: $published}}, order_by: {created_at: desc}) {
+func GetPosts(cfg Config, onlyPublished bool, category string, limit, offset int) ([]models.Post, error) {
+	conditions := []string{}
+	variables := map[string]interface{}{}
+	varDecl := "$limit: Int!, $offset: Int!"
+
+	if onlyPublished {
+		conditions = append(conditions, "published: {_eq: true}")
+	}
+	if category != "" {
+		conditions = append(conditions, "category: {_eq: $category}")
+		variables["category"] = category
+		varDecl = "$limit: Int!, $offset: Int!, $category: String"
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "where: {" + joinConditions(conditions) + "}"
+	}
+
+	if limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	variables["limit"] = limit
+	variables["offset"] = offset
+
+	queryVar := ""
+	if varDecl != "" {
+		queryVar = "(" + varDecl + ")"
+	}
+	query := fmt.Sprintf(`
+	query GetPosts%s {
+	  blog_service_blogs(%s order_by: {created_at: desc}, limit: $limit, offset: $offset) {
 	    id
 	    user_id
 	    title
 	    content
+	    excerpt
+	    category
 	    tags
+	    read_time
 	    published
 	    created_at
 	    updated_at
@@ -107,12 +160,7 @@ func GetPosts(cfg Config, onlyPublished bool) ([]models.Post, error) {
 	      created_at
 	    }
 	  }
-	}`
-
-	variables := map[string]interface{}{"published": nil}
-	if onlyPublished {
-		variables["published"] = true
-	}
+	}`, queryVar, whereClause)
 
 	payload := map[string]interface{}{
 		"query":     query,
@@ -147,7 +195,75 @@ func GetPosts(cfg Config, onlyPublished bool) ([]models.Post, error) {
 	return respData.Data.Posts, nil
 }
 
-// GetPostByID fetches a single blog post with images by ID
+func GetPostsCount(cfg Config, onlyPublished bool, category string) (int, error) {
+	conditions := []string{}
+	variables := map[string]interface{}{}
+	varDecl := ""
+
+	if onlyPublished {
+		conditions = append(conditions, "published: {_eq: true}")
+	}
+	if category != "" {
+		conditions = append(conditions, "category: {_eq: $category}")
+		variables["category"] = category
+		varDecl = "$category: String"
+	}
+
+	whereClause := ""
+	if len(conditions) > 0 {
+		whereClause = "where: {" + joinConditions(conditions) + "}"
+	}
+
+	queryVar := ""
+	if varDecl != "" {
+		queryVar = "(" + varDecl + ")"
+	}
+	query := fmt.Sprintf(`
+	query GetPostsCount%s {
+	  blog_service_blogs_aggregate(%s) {
+	    aggregate {
+	      count
+	    }
+	  }
+	}`, queryVar, whereClause)
+
+	payload := map[string]interface{}{
+		"query":     query,
+		"variables": variables,
+	}
+	body, _ := json.Marshal(payload)
+
+	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	var respData struct {
+		Data struct {
+			Aggregate struct {
+				Aggregate struct {
+					Count int `json:"count"`
+				} `json:"aggregate"`
+			} `json:"blog_service_blogs_aggregate"`
+		} `json:"data"`
+		Errors []interface{} `json:"errors"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return 0, err
+	}
+	if len(respData.Errors) > 0 {
+		return 0, fmt.Errorf("hasura errors: %v", respData.Errors)
+	}
+
+	return respData.Data.Aggregate.Aggregate.Count, nil
+}
+
 func GetPostByID(cfg Config, id string) (models.Post, error) {
 	query := `
 	query GetPost($id: uuid!) {
@@ -156,7 +272,10 @@ func GetPostByID(cfg Config, id string) (models.Post, error) {
 	    user_id
 	    title
 	    content
+	    excerpt
+	    category
 	    tags
+	    read_time
 	    published
 	    created_at
 	    updated_at
@@ -202,14 +321,16 @@ func GetPostByID(cfg Config, id string) (models.Post, error) {
 	return respData.Data.Post, nil
 }
 
-// UpdatePost updates a blog post
 func UpdatePost(cfg Config, id string, post models.Post) error {
 	query := `
-	mutation UpdatePost($id: uuid!, $title: String, $content: String, $tags: jsonb, $published: Boolean) {
+	mutation UpdatePost($id: uuid!, $title: String, $content: String, $excerpt: String, $category: String, $tags: jsonb, $read_time: Int, $published: Boolean) {
 	  update_blog_service_blogs_by_pk(pk_columns: {id: $id}, _set: {
 	    title: $title,
 	    content: $content,
+	    excerpt: $excerpt,
+	    category: $category,
 	    tags: $tags,
+	    read_time: $read_time,
 	    published: $published
 	  }) {
 	    id
@@ -220,7 +341,10 @@ func UpdatePost(cfg Config, id string, post models.Post) error {
 		"id":        id,
 		"title":     post.Title,
 		"content":   post.Content,
+		"excerpt":   post.Excerpt,
+		"category":  post.Category,
 		"tags":      post.Tags,
+		"read_time": post.ReadTime,
 		"published": post.Published,
 	}
 
@@ -258,7 +382,6 @@ func UpdatePost(cfg Config, id string, post models.Post) error {
 	return nil
 }
 
-// DeletePost deletes a blog post
 func DeletePost(cfg Config, id string) error {
 	query := `
 	mutation DeletePost($id: uuid!) {
@@ -301,11 +424,6 @@ func DeletePost(cfg Config, id string) error {
 	return nil
 }
 
-// =========================
-// Image Management
-// =========================
-
-// AddImage attaches a new image to an existing blog post
 func AddImage(cfg Config, postID, url, caption string) (string, error) {
 	query := `
 	mutation InsertImage($post_id: uuid!, $url: String!, $caption: String) {
@@ -355,4 +473,15 @@ func AddImage(cfg Config, postID, url, caption string) (string, error) {
 	}
 
 	return respData.Data.InsertImage.ID, nil
+}
+
+func joinConditions(conds []string) string {
+	result := ""
+	for i, c := range conds {
+		if i > 0 {
+			result += ", "
+		}
+		result += c
+	}
+	return result
 }

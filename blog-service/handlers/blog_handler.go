@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 
 	"blog-service/middlewares"
 	"blog-service/models"
@@ -12,42 +13,36 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// CreatePost creates a new blog post (admin only)
 func CreatePost(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Extract user ID from context
 		userIDVal := r.Context().Value(middlewares.CtxUserID)
 		if userIDVal == nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Unauthorized. Please log in again."), http.StatusUnauthorized)
 			return
 		}
 		userID := userIDVal.(string)
 
-		// Decode request body
 		var req models.Post
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			log.Printf("❌ Failed to decode request body: %v", err)
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+			log.Printf("Failed to decode request body: %v", err)
+			utils.WriteJSONError(w, utils.NewBadRequestError("Invalid request body. Please provide valid JSON."), http.StatusBadRequest)
 			return
 		}
 		req.UserID = userID
 
-		// Ensure Images slice is not nil
 		if req.Images == nil {
 			req.Images = []models.Image{}
 		}
 
 		log.Printf("Creating post: %+v", req)
 
-		// Insert post
 		id, err := utils.InsertPost(cfg, req)
 		if err != nil {
-			log.Printf("❌ InsertPost failed: %v", err)
-			http.Error(w, "failed to insert post: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("InsertPost failed: %v", err)
+			utils.WriteJSONError(w, utils.NewServerError("Failed to create post. Please try again."), http.StatusInternalServerError)
 			return
 		}
 
-		// 🔔 Send notification event
 		utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
 			UserID:        userID,
 			Title:         "New Post Created",
@@ -60,133 +55,111 @@ func CreatePost(cfg utils.Config) http.HandlerFunc {
 			},
 		})
 
-		resp := map[string]interface{}{
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 			"post_id": id,
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
-	}
-}
-
-// GetPosts returns posts; non-admins only get published posts
-func GetPosts(cfg utils.Config) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		roleVal := r.Context().Value(middlewares.CtxRole)
-		role := ""
-		if roleVal != nil {
-			role = roleVal.(string)
-		}
-
-		onlyPublished := role != "admin"
-
-		posts, err := utils.GetPosts(cfg, onlyPublished)
-		if err != nil {
-			log.Printf("❌ GetPosts failed: %v", err)
-			http.Error(w, "failed to fetch posts: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// 🔔 Optional: notify that user viewed posts
-		userIDVal := r.Context().Value(middlewares.CtxUserID)
-		if userIDVal != nil {
-			userID := userIDVal.(string)
-			utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
-				UserID:        userID,
-				Title:         "Posts Viewed",
-				Message:       "You checked blog posts.",
-				SourceService: "blog-service",
-				Action:        "POST_FETCH",
-				Meta: map[string]interface{}{
-					"post_count": len(posts),
-				},
-			})
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"success": true,
-			"posts":   posts,
 		})
 	}
 }
 
-// GetPost returns a single post by id (published unless admin)
+func GetPosts(cfg utils.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		category := r.URL.Query().Get("category")
+		limitStr := r.URL.Query().Get("limit")
+		offsetStr := r.URL.Query().Get("offset")
+
+		limit := 20
+		offset := 0
+
+		if limitStr != "" {
+			if v, err := strconv.Atoi(limitStr); err == nil && v > 0 && v <= 100 {
+				limit = v
+			}
+		}
+		if offsetStr != "" {
+			if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
+				offset = v
+			}
+		}
+
+		posts, err := utils.GetPosts(cfg, true, category, limit, offset)
+		if err != nil {
+			log.Printf("GetPosts failed: %v", err)
+			utils.WriteJSONError(w, utils.NewServerError("Failed to fetch posts. Please try again."), http.StatusInternalServerError)
+			return
+		}
+
+		total, err := utils.GetPostsCount(cfg, true, category)
+		if err != nil {
+			log.Printf("GetPostsCount failed: %v", err)
+			utils.WriteJSONError(w, utils.NewServerError("Failed to fetch post count."), http.StatusInternalServerError)
+			return
+		}
+
+		if posts == nil {
+			posts = []models.Post{}
+		}
+
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"posts":   posts,
+			"total":   total,
+			"limit":   limit,
+			"offset":  offset,
+		})
+	}
+}
+
 func GetPost(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if id == "" {
-			http.Error(w, "missing id param", http.StatusBadRequest)
+			utils.WriteJSONError(w, utils.NewBadRequestError("Missing post ID parameter"), http.StatusBadRequest)
 			return
 		}
 
 		post, err := utils.GetPostByID(cfg, id)
 		if err != nil {
-			log.Printf("❌ GetPostByID failed for id=%s: %v", id, err)
-			http.Error(w, "failed to fetch post: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("GetPostByID failed for id=%s: %v", id, err)
+			utils.WriteJSONError(w, utils.NewNotFoundError("Post not found."), http.StatusNotFound)
 			return
 		}
 
-		roleVal := r.Context().Value(middlewares.CtxRole)
-		role := ""
-		if roleVal != nil {
-			role = roleVal.(string)
-		}
-		if !post.Published && role != "admin" {
-			http.Error(w, "forbidden", http.StatusForbidden)
+		if !post.Published {
+			utils.WriteJSONError(w, utils.NewNotFoundError("Post not found."), http.StatusNotFound)
 			return
 		}
 
-		// 🔔 Optional: notify that a single post was viewed
-		userIDVal := r.Context().Value(middlewares.CtxUserID)
-		if userIDVal != nil {
-			userID := userIDVal.(string)
-			utils.PublishNotification(utils.Rdb, "blog_events", utils.NotificationEvent{
-				UserID:        userID,
-				Title:         "Post Viewed",
-				Message:       "You viewed a blog post.",
-				SourceService: "blog-service",
-				Action:        "POST_FETCH_SINGLE",
-				Meta: map[string]interface{}{
-					"post_id": id,
-					"title":   post.Title,
-				},
-			})
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 			"post":    post,
 		})
 	}
 }
 
-// UpdatePost updates a post (admin only)
 func UpdatePost(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if id == "" {
-			http.Error(w, "missing id param", http.StatusBadRequest)
+			utils.WriteJSONError(w, utils.NewBadRequestError("Missing post ID parameter"), http.StatusBadRequest)
 			return
 		}
 
 		var req models.Post
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			log.Printf("❌ Failed to decode request body for update id=%s: %v", id, err)
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+			log.Printf("Failed to decode request body for update id=%s: %v", id, err)
+			utils.WriteJSONError(w, utils.NewBadRequestError("Invalid request body. Please provide valid JSON."), http.StatusBadRequest)
 			return
 		}
 
 		log.Printf("Updating post id=%s: %+v", id, req)
 
 		if err := utils.UpdatePost(cfg, id, req); err != nil {
-			log.Printf("❌ UpdatePost failed id=%s: %v", id, err)
-			http.Error(w, "failed to update post: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("UpdatePost failed id=%s: %v", id, err)
+			utils.WriteJSONError(w, utils.NewServerError("Failed to update post. Please try again."), http.StatusInternalServerError)
 			return
 		}
 
-		// 🔔 Send notification that a post was updated
 		userIDVal := r.Context().Value(middlewares.CtxUserID)
 		if userIDVal != nil {
 			userID := userIDVal.(string)
@@ -203,31 +176,28 @@ func UpdatePost(cfg utils.Config) http.HandlerFunc {
 			})
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 		})
 	}
 }
 
-// DeletePost deletes a post (admin only)
 func DeletePost(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		if id == "" {
-			http.Error(w, "missing id param", http.StatusBadRequest)
+			utils.WriteJSONError(w, utils.NewBadRequestError("Missing post ID parameter"), http.StatusBadRequest)
 			return
 		}
 
 		log.Printf("Deleting post id=%s", id)
 
 		if err := utils.DeletePost(cfg, id); err != nil {
-			log.Printf("❌ DeletePost failed id=%s: %v", id, err)
-			http.Error(w, "failed to delete post: "+err.Error(), http.StatusInternalServerError)
+			log.Printf("DeletePost failed id=%s: %v", id, err)
+			utils.WriteJSONError(w, utils.NewServerError("Failed to delete post. Please try again."), http.StatusInternalServerError)
 			return
 		}
 
-		// 🔔 Send notification that a post was deleted
 		userIDVal := r.Context().Value(middlewares.CtxUserID)
 		if userIDVal != nil {
 			userID := userIDVal.(string)
@@ -243,9 +213,71 @@ func DeletePost(cfg utils.Config) http.HandlerFunc {
 			})
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
+		})
+	}
+}
+
+type devtoArticle struct {
+	ID                 int    `json:"id"`
+	Title              string `json:"title"`
+	Description        string `json:"description"`
+	URL                string `json:"url"`
+	CoverImage         string `json:"cover_image"`
+	Tags               string `json:"tags"`
+	ReadingTimeMinutes int    `json:"reading_time_minutes"`
+	PublishedAt        string `json:"published_at"`
+	User               struct {
+		Name        string `json:"name"`
+		Username    string `json:"username"`
+		ProfileImage string `json:"profile_image"`
+	} `json:"user"`
+}
+
+func GetExternalPosts(cfg utils.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tag := r.URL.Query().Get("tag")
+		perPage := r.URL.Query().Get("per_page")
+
+		if tag == "" {
+			tag = "habits"
+		}
+
+		url := "https://dev.to/api/articles?tag=" + tag
+		if perPage != "" {
+			url += "&per_page=" + perPage
+		}
+
+		resp, err := http.Get(url)
+		if err != nil {
+			log.Printf("Dev.to API request failed: %v", err)
+			utils.WriteJSONError(w, utils.NewServerError("Failed to fetch external posts."), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("Dev.to API returned status %d", resp.StatusCode)
+			utils.WriteJSONError(w, utils.NewServerError("External API returned an error."), http.StatusInternalServerError)
+			return
+		}
+
+		var articles []devtoArticle
+		if err := json.NewDecoder(resp.Body).Decode(&articles); err != nil {
+			log.Printf("Failed to decode Dev.to response: %v", err)
+			utils.WriteJSONError(w, utils.NewServerError("Failed to parse external posts."), http.StatusInternalServerError)
+			return
+		}
+
+		if articles == nil {
+			articles = []devtoArticle{}
+		}
+
+		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
+			"success":  true,
+			"articles": articles,
+			"tag":      tag,
 		})
 	}
 }

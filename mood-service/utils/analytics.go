@@ -3,8 +3,7 @@ package utils
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
-
+	"log"
 	"net/http"
 
 	"mood-service/models"
@@ -12,7 +11,7 @@ import (
 
 // GetMoodsForPeriod fetches mood rows for a user between fromDate and toDate (inclusive).
 // fromDate and toDate format: "YYYY-MM-DD"
-func GetMoodsForPeriod(cfg Config, userID, fromDate, toDate string) ([]models.Mood, error) {
+func GetMoodsForPeriod(cfg Config, userID, fromDate, toDate string) ([]models.Mood, *ServiceError) {
 	query := `
     query GetMoodsForPeriod($user_id: uuid!, $from: date!, $to: date!) {
       mood_service_moods(where: {
@@ -47,7 +46,11 @@ func GetMoodsForPeriod(cfg Config, userID, fromDate, toDate string) ([]models.Mo
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		log.Printf("❌ GetMoodsForPeriod request error: %v | user_id=%s", err, userID)
+		return nil, NewHasuraError(
+			"Failed to fetch mood analytics due to a database connection error",
+			"The mood service could not reach the database. Please try again later.",
+		)
 	}
 	defer resp.Body.Close()
 
@@ -59,10 +62,15 @@ func GetMoodsForPeriod(cfg Config, userID, fromDate, toDate string) ([]models.Mo
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-		return nil, err
+		log.Printf("❌ GetMoodsForPeriod JSON decode error: %v | user_id=%s", err, userID)
+		return nil, NewServerError("Failed to process analytics data. Please try again.")
 	}
 	if len(respData.Errors) > 0 {
-		return nil, fmt.Errorf("hasura errors: %v", respData.Errors)
+		log.Printf("❌ GetMoodsForPeriod Hasura errors: %v | user_id=%s", respData.Errors, userID)
+		return nil, NewHasuraError(
+			"Could not retrieve mood analytics",
+			"The database encountered an error while fetching your mood analytics. Please try again.",
+		)
 	}
 	return respData.Data.Moods, nil
 }

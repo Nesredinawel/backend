@@ -19,6 +19,6 @@ func main() {
 	routes.PrintRoutes(cfg)
 
 	// Start server
-	log.Printf("[mood-service] ✅ Starting server on port %s\n", cfg.Port)
+	log.Printf("[blog-service] ✅ Starting server on port %s\n", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, r))
 }

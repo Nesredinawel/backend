@@ -1,0 +1,316 @@
+openapi: 3.0.3
+info:
+  title: Blog Service
+  version: 1.0.0
+  description: |
+    Blog post management service.
+    Supports creating, reading, updating, and deleting blog posts
+    with tags and image attachments.
+    Write operations require the `admin` role.
+
+servers:
+  - url: http://localhost:8081
+    description: API Gateway (production)
+
+tags:
+  - name: Health
+    description: Service health checks
+  - name: Posts
+    description: Blog post CRUD
+
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/posts:
+    get:
+      tags: [Posts]
+      summary: List blog posts
+      description: |
+        Returns all blog posts. Non-admin users only see published posts;
+        admins see all posts including drafts.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Posts retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  posts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Post"
+
+    post:
+      tags: [Posts]
+      summary: Create a blog post
+      description: Creates a new blog post. Admin role required.
+      security:
+        - bearerAuth: []
+      x-requires-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content, published]
+              properties:
+                title:
+                  type: string
+                  maxLength: 255
+                  description: Post title
+                  example: Getting Started with Go
+                content:
+                  type: string
+                  description: Full post content (markdown supported)
+                  example: "Go is a statically typed, compiled programming language..."
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Post tags
+                  example: [go, programming, backend]
+                published:
+                  type: boolean
+                  description: Whether the post is publicly visible
+                  example: true
+                images:
+                  type: array
+                  description: Attached images
+                  items:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                        example: https://storage.example.com/blog/img.jpg
+                      caption:
+                        type: string
+                        example: Go Gopher illustration
+      responses:
+        "200":
+          description: Post created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  post_id:
+                    type: string
+                    format: uuid
+                    example: 550e8400-e29b-41d4-a716-446655440000
+        "403":
+          description: Forbidden — admin role required
+
+  /api/v1/posts/{id}:
+    get:
+      tags: [Posts]
+      summary: Get a blog post
+      description: |
+        Returns a single blog post by ID.
+        Unpublished posts are only visible to admin users.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Post UUID
+      responses:
+        "200":
+          description: Post retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  post:
+                    $ref: "#/components/schemas/Post"
+        "403":
+          description: Forbidden — post not published and user is not admin
+
+    put:
+      tags: [Posts]
+      summary: Update a blog post
+      description: Updates an existing blog post. Admin role required.
+      security:
+        - bearerAuth: []
+      x-requires-role: admin
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Post UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  maxLength: 255
+                  example: Updated Title
+                content:
+                  type: string
+                  example: Updated content here...
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  example: [updated, blog]
+                published:
+                  type: boolean
+                  example: true
+                images:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                      caption:
+                        type: string
+      responses:
+        "200":
+          description: Post updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "403":
+          description: Forbidden — admin role required
+
+    delete:
+      tags: [Posts]
+      summary: Delete a blog post
+      description: Deletes a blog post by ID. Admin role required.
+      security:
+        - bearerAuth: []
+      x-requires-role: admin
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Post UUID
+      responses:
+        "200":
+          description: Post deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "403":
+          description: Forbidden — admin role required
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Post:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: Getting Started with Go
+        content:
+          type: string
+          example: "Go is a statically typed, compiled programming language..."
+        tags:
+          type: array
+          items:
+            type: string
+          example: [go, programming, backend]
+        published:
+          type: boolean
+          example: true
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostImage"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PostImage:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        post_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+          example: https://storage.example.com/blog/img.jpg
+        caption:
+          type: string
+          nullable: true
+          example: Go Gopher illustration
+        created_at:
+          type: string
+          format: date-time
+
+security:
+  - bearerAuth: []

@@ -1,0 +1,340 @@
+openapi: 3.0.3
+info:
+  title: Auth Service
+  version: 1.0.0
+  description: |
+    Authentication & user profile management.
+    Supports email/password and Google OAuth2 sign-in flows.
+    Issues JWT access tokens (15 min) and refresh tokens (7 days).
+
+servers:
+  - url: http://localhost:8081
+    description: API Gateway (production)
+  - url: http://localhost:8081
+    description: Direct auth-service access (development)
+
+tags:
+  - name: Health
+    description: Service health checks
+  - name: Authentication
+    description: Signup, login, and OAuth flows (public)
+  - name: Profile
+    description: User profile management (authenticated)
+
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: ok
+
+  /auth/email/signup:
+    post:
+      tags: [Authentication]
+      summary: Register with email
+      description: |
+        Creates a new user account with email and password.
+        A verification email is sent to the provided address (valid for 15 minutes).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  example: Jane Doe
+                email:
+                  type: string
+                  format: email
+                  example: jane@example.com
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                  example: SecurePass123
+      responses:
+        "200":
+          description: Signup initiated — verification email sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Check your email to confirm signup. Link valid for 15 minutes.
+        "409":
+          description: User already exists
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: user already exists
+
+  /auth/email/verify:
+    get:
+      tags: [Authentication]
+      summary: Verify email address
+      description: |
+        Completes email verification using the token sent to the user's email.
+        Creates the user account in the database.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Verification token from email link
+      responses:
+        "200":
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Email verified successfully.
+                  user_id:
+                    type: string
+                    format: uuid
+                    example: 550e8400-e29b-41d4-a716-446655440000
+
+  /auth/email/login:
+    post:
+      tags: [Authentication]
+      summary: Login with email
+      description: Authenticates with email and password, returns JWT session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: jane@example.com
+                password:
+                  type: string
+                  example: SecurePass123
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIs...
+                  refresh_token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIs...
+                  expires_in:
+                    type: integer
+                    example: 900
+                  user:
+                    type: object
+                    properties:
+                      user_id:
+                        type: string
+                        format: uuid
+                      email:
+                        type: string
+                        format: email
+                      name:
+                        type: string
+                      provider:
+                        type: string
+                        enum: [local, google]
+                      role:
+                        type: string
+                        enum: [user, admin]
+        "403":
+          description: Account uses Google login
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: this account uses Google login
+
+  /auth/google/login:
+    get:
+      tags: [Authentication]
+      summary: Google OAuth login
+      description: Redirects the browser to Google's OAuth consent screen.
+      security: []
+      responses:
+        "307":
+          description: Redirect to Google OAuth consent screen
+
+  /auth/google/callback:
+    get:
+      tags: [Authentication]
+      summary: Google OAuth callback
+      description: |
+        Handles the OAuth callback from Google.
+        Exchanges the authorization code for tokens, fetches the user's Google profile,
+        upserts the user in the database, and returns a JWT session.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Authorization code from Google
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          description: OAuth state parameter for CSRF protection
+      responses:
+        "200":
+          description: Google login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIs...
+                  refresh_token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIs...
+                  expires_in:
+                    type: integer
+                    example: 900
+                  user:
+                    type: object
+                    properties:
+                      user_id:
+                        type: string
+                        format: uuid
+                      email:
+                        type: string
+                        format: email
+                      name:
+                        type: string
+                      avatar:
+                        type: string
+                        format: uri
+                      provider:
+                        type: string
+                        example: google
+                      role:
+                        type: string
+                        example: user
+
+  /user/profile:
+    get:
+      tags: [Profile]
+      summary: Get my profile
+      description: Returns the authenticated user's profile information.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Missing or invalid JWT
+
+    put:
+      tags: [Profile]
+      summary: Update my profile
+      description: Updates the authenticated user's bio and/or avatar.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bio:
+                  type: string
+                  maxLength: 500
+                  description: Short biography
+                  example: Full-stack developer & coffee enthusiast
+                custom_avatar_url:
+                  type: string
+                  format: uri
+                  description: Custom avatar image URL
+                  example: https://storage.example.com/avatars/me.jpg
+      responses:
+        "200":
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token. Obtain one via `/auth/email/login` or `/auth/google/callback`.
+        Format: `Authorization: Bearer <token>`
+
+  schemas:
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Profile record ID
+        user_id:
+          type: string
+          format: uuid
+          description: Associated user ID
+        bio:
+          type: string
+          nullable: true
+          example: Full-stack developer & coffee enthusiast
+        custom_avatar_url:
+          type: string
+          format: uri
+          nullable: true
+          example: https://storage.example.com/avatars/me.jpg
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+security:
+  - bearerAuth: []

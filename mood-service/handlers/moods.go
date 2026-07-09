@@ -9,6 +9,12 @@ import (
 	"mood-service/utils"
 )
 
+func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
 // CreateMood adds or updates today's mood
 func CreateMood(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -16,7 +22,7 @@ func CreateMood(cfg utils.Config) http.HandlerFunc {
 
 		var req models.Mood
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request body", http.StatusBadRequest)
+			utils.WriteJSONError(w, utils.NewBadRequestError("Invalid request body. Please provide valid JSON."), http.StatusBadRequest)
 			return
 		}
 
@@ -24,11 +30,17 @@ func CreateMood(cfg utils.Config) http.HandlerFunc {
 
 		id, err := utils.InsertOrUpdateMood(cfg, req)
 		if err != nil {
-			http.Error(w, "failed to insert/update mood", http.StatusInternalServerError)
+			switch err.Code {
+			case utils.ErrCodeValidation:
+				utils.WriteJSONError(w, err, http.StatusBadRequest)
+			case utils.ErrCodeHasura:
+				utils.WriteJSONError(w, err, http.StatusInternalServerError)
+			default:
+				utils.WriteJSONError(w, err, http.StatusInternalServerError)
+			}
 			return
 		}
 
-		// 🔔 Send notification event
 		utils.PublishNotification(utils.Rdb, "mood_events", utils.NotificationEvent{
 			UserID:        userID,
 			Title:         "Mood Saved",
@@ -43,7 +55,7 @@ func CreateMood(cfg utils.Config) http.HandlerFunc {
 			},
 		})
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 			"mood_id": id,
 			"message": "Mood saved successfully (updated if already exists for today)",
@@ -58,11 +70,15 @@ func GetMoods(cfg utils.Config) http.HandlerFunc {
 
 		moods, err := utils.GetUserMoods(cfg, userID)
 		if err != nil {
-			http.Error(w, "failed to fetch moods", http.StatusInternalServerError)
+			switch err.Code {
+			case utils.ErrCodeHasura:
+				utils.WriteJSONError(w, err, http.StatusInternalServerError)
+			default:
+				utils.WriteJSONError(w, err, http.StatusInternalServerError)
+			}
 			return
 		}
 
-		// 🔔 Optional: notify that user viewed mood history
 		utils.PublishNotification(utils.Rdb, "mood_events", utils.NotificationEvent{
 			UserID:        userID,
 			Title:         "Mood History Viewed",
@@ -74,7 +90,7 @@ func GetMoods(cfg utils.Config) http.HandlerFunc {
 			},
 		})
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"success": true,
 			"moods":   moods,
 		})

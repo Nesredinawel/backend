@@ -10,7 +10,7 @@ import (
 	"auth-service/utils"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
 func SetupRoutes(cfg utils.Config) http.Handler {
@@ -19,9 +19,9 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 	// ================================
 	// ⚙️ Global Middlewares
 	// ================================
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.AllowContentType("application/json", "text/plain"))
+	r.Use(chimiddleware.Logger)
+	r.Use(chimiddleware.Recoverer)
+	r.Use(chimiddleware.AllowContentType("application/json", "text/plain"))
 	r.Use(middlewares.RequestLogger)
 
 	// ================================
@@ -61,8 +61,7 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 	// ❌ 404 Not Found Handler
 	// ================================
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		msg := fmt.Sprintf("❌ Route not found: %s %s", r.Method, r.URL.Path)
-		http.Error(w, msg, http.StatusNotFound)
+		utils.WriteJSONError(w, utils.NewNotFoundError(fmt.Sprintf("Route not found: %s %s", r.Method, r.URL.Path)), http.StatusNotFound)
 	})
 
 	return r

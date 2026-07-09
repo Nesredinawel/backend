@@ -5,166 +5,250 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"auth-service/models"
 )
 
-// ===============================
-// 📌 Create Empty User Profile in auth_service schema
-// Called after signup or Google login
-// ===============================
-func CreateEmptyUserProfile(cfg Config, userID string) error {
-	query := `
-	mutation InsertUserProfile($user_id: uuid!) {
-		insert_auth_service_user_profiles_one(object: {user_id: $user_id}) {
-			id
-			user_id
-		}
-	}`
-
-	payload := map[string]interface{}{
-		"query": query,
-		"variables": map[string]interface{}{
-			"user_id": userID,
-		},
-	}
-
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
-	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to create user profile: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to create user profile, status: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-// ===============================
-// 📌 Get User Profile from auth_service schema
-// ===============================
-func GetUserProfileFromHasura(cfg Config, userID string) (*models.UserProfile, error) {
-	query := `
-	query GetUserProfile($user_id: uuid!) {
-		auth_service_user_profiles(where: {user_id: {_eq: $user_id}}) {
-			id
-			user_id
-			bio
-			custom_avatar_url
-			created_at
-			updated_at
-		}
-	}`
-
-	payload := map[string]interface{}{
-		"query": query,
-		"variables": map[string]interface{}{
-			"user_id": userID,
-		},
-	}
-
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
-	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch profile: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to fetch profile, status: %d", resp.StatusCode)
-	}
-
-	var result struct {
-		Data struct {
-			UserProfiles []models.UserProfile `json:"auth_service_user_profiles"`
-		} `json:"data"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode error: %v", err)
-	}
-
-	if len(result.Data.UserProfiles) == 0 {
-		return nil, fmt.Errorf("profile not found for user %s", userID)
-	}
-
-	return &result.Data.UserProfiles[0], nil
-}
-
-// ===============================
-// 📌 Update User Profile (Upsert) in auth_service schema
-// ===============================
-func UpdateUserProfileInHasura(cfg Config, profile models.UserProfile) (*models.UserProfile, error) {
-	query := `
-	mutation UpsertUserProfile($user_id: uuid!, $bio: String, $custom_avatar_url: String) {
-		insert_auth_service_user_profiles_one(
-			object: { user_id: $user_id, bio: $bio, custom_avatar_url: $custom_avatar_url },
-			on_conflict: {
-				constraint: user_profiles_user_id_key,
-				update_columns: [bio, custom_avatar_url, updated_at]
-			}
-		) {
-			id
-			user_id
-			bio
-			custom_avatar_url
-			created_at
-			updated_at
-		}
-	}`
-
-	nilIfEmpty := func(s *string) interface{} {
-		if s == nil {
-			return nil
-		}
-		return *s
-	}
-
-	variables := map[string]interface{}{
-		"user_id":           profile.UserID,
-		"bio":               nilIfEmpty(profile.Bio),
-		"custom_avatar_url": nilIfEmpty(profile.CustomAvatarURL),
-	}
-
+func doHasuraRequest(cfg Config, query string, variables map[string]interface{}) (*http.Response, error) {
 	payload := map[string]interface{}{
 		"query":     query,
 		"variables": variables,
 	}
-
 	body, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
 	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
 	req.Header.Set("Content-Type", "application/json")
+	return http.DefaultClient.Do(req)
+}
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to update profile: %v", err)
-	}
+func decodeHasuraResponse(resp *http.Response, target interface{}) error {
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to update profile, status: %d", resp.StatusCode)
+	var wrapper struct {
+		Data   interface{}   `json:"data"`
+		Errors []interface{} `json:"errors"`
+	}
+	wrapper.Data = target
+
+	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+		return fmt.Errorf("decode error: %v", err)
+	}
+	if len(wrapper.Errors) > 0 {
+		return fmt.Errorf("hasura error: %v", wrapper.Errors)
+	}
+	return nil
+}
+
+func CreateEmptyUserProfile(cfg Config, userID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	resp, err := doHasuraRequest(cfg, `
+		mutation UpdateProfile($user_id: uuid!, $updated_at: timestamptz) {
+			update_auth_service_user_profiles(
+				where: {user_id: {_eq: $user_id}},
+				_set: {updated_at: $updated_at}
+			) {
+				affected_rows
+			}
+		}`,
+		map[string]interface{}{
+			"user_id":    userID,
+			"updated_at": now,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("update attempt failed: %v", err)
 	}
 
-	var result struct {
-		Data struct {
-			InsertUserProfilesOne models.UserProfile `json:"insert_auth_service_user_profiles_one"`
-		} `json:"data"`
+	var updateResult struct {
+		UpdateAuthServiceUserProfiles struct {
+			AffectedRows int `json:"affected_rows"`
+		} `json:"update_auth_service_user_profiles"`
+	}
+	if err := decodeHasuraResponse(resp, &updateResult); err != nil {
+		return err
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode error: %v", err)
+	if updateResult.UpdateAuthServiceUserProfiles.AffectedRows > 0 {
+		return nil
 	}
 
-	return &result.Data.InsertUserProfilesOne, nil
+	resp, err = doHasuraRequest(cfg, `
+		mutation InsertProfile($user_id: uuid!, $updated_at: timestamptz) {
+			insert_auth_service_user_profiles_one(object: {
+				user_id: $user_id,
+				updated_at: $updated_at
+			}) { id user_id }
+		}`,
+		map[string]interface{}{
+			"user_id":    userID,
+			"updated_at": now,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("insert attempt failed: %v", err)
+	}
+
+	var insertResult struct {
+		InsertAuthServiceUserProfilesOne *struct {
+			ID     string `json:"id"`
+			UserID string `json:"user_id"`
+		} `json:"insert_auth_service_user_profiles_one"`
+	}
+	if err := decodeHasuraResponse(resp, &insertResult); err != nil {
+		return err
+	}
+	if insertResult.InsertAuthServiceUserProfilesOne == nil {
+		return fmt.Errorf("insert returned nil")
+	}
+
+	return nil
+}
+
+func GetUserProfileFromHasura(cfg Config, userID string) (*models.UserProfile, error) {
+	resp, err := doHasuraRequest(cfg, `
+		query GetUserProfile($user_id: uuid!) {
+			user: auth_service_users_by_pk(id: $user_id) {
+				id name email avatar_url
+			}
+			profile: auth_service_user_profiles(where: {user_id: {_eq: $user_id}}) {
+				id user_id bio custom_avatar_url created_at updated_at
+			}
+		}`,
+		map[string]interface{}{
+			"user_id": userID,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %v", err)
+	}
+
+	var rawResult struct {
+		User *struct {
+			ID        string  `json:"id"`
+			Name      string  `json:"name"`
+			Email     string  `json:"email"`
+			AvatarURL *string `json:"avatar_url"`
+		} `json:"user"`
+		Profile []struct {
+			ID              string  `json:"id"`
+			UserID          string  `json:"user_id"`
+			Bio             *string `json:"bio"`
+			CustomAvatarURL *string `json:"custom_avatar_url"`
+			CreatedAt       *string `json:"created_at"`
+			UpdatedAt       *string `json:"updated_at"`
+		} `json:"profile"`
+	}
+	if err := decodeHasuraResponse(resp, &rawResult); err != nil {
+		return nil, err
+	}
+
+	if rawResult.User == nil {
+		return nil, fmt.Errorf("user not found: %s", userID)
+	}
+
+	profile := &models.UserProfile{
+		UserID:    rawResult.User.ID,
+		Name:      rawResult.User.Name,
+		Email:     rawResult.User.Email,
+		AvatarURL: rawResult.User.AvatarURL,
+	}
+
+	if len(rawResult.Profile) > 0 {
+		p := rawResult.Profile[0]
+		profile.ID = p.ID
+		profile.Bio = p.Bio
+		profile.CustomAvatarURL = p.CustomAvatarURL
+		profile.CreatedAt = p.CreatedAt
+		profile.UpdatedAt = p.UpdatedAt
+	}
+
+	return profile, nil
+}
+
+func UpdateUserProfileInHasura(cfg Config, userID string, input models.UserProfileInput) (*models.UserProfile, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	resp, err := doHasuraRequest(cfg, `
+		mutation UpdateProfile(
+			$user_id: uuid!,
+			$bio: String,
+			$custom_avatar_url: String,
+			$updated_at: timestamptz
+		) {
+			update_auth_service_user_profiles(
+				where: {user_id: {_eq: $user_id}},
+				_set: {bio: $bio, custom_avatar_url: $custom_avatar_url, updated_at: $updated_at}
+			) {
+				affected_rows
+			}
+		}`,
+		map[string]interface{}{
+			"user_id":           userID,
+			"bio":               input.Bio,
+			"custom_avatar_url": input.CustomAvatarURL,
+			"updated_at":        now,
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("update attempt failed: %v", err)
+	}
+
+	var updateResult struct {
+		UpdateAuthServiceUserProfiles struct {
+			AffectedRows int `json:"affected_rows"`
+		} `json:"update_auth_service_user_profiles"`
+	}
+	if err := decodeHasuraResponse(resp, &updateResult); err != nil {
+		return nil, err
+	}
+
+	if updateResult.UpdateAuthServiceUserProfiles.AffectedRows == 0 {
+		resp, err = doHasuraRequest(cfg, `
+			mutation InsertProfile(
+				$user_id: uuid!,
+				$bio: String,
+				$custom_avatar_url: String,
+				$updated_at: timestamptz
+			) {
+				insert_auth_service_user_profiles_one(object: {
+					user_id: $user_id,
+					bio: $bio,
+					custom_avatar_url: $custom_avatar_url,
+					updated_at: $updated_at
+				}) {
+					id user_id bio custom_avatar_url created_at updated_at
+				}
+			}`,
+			map[string]interface{}{
+				"user_id":           userID,
+				"bio":               input.Bio,
+				"custom_avatar_url": input.CustomAvatarURL,
+				"updated_at":        now,
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("insert attempt failed: %v", err)
+		}
+
+		var insertResult struct {
+			InsertAuthServiceUserProfilesOne *struct {
+				ID              string  `json:"id"`
+				UserID          string  `json:"user_id"`
+				Bio             *string `json:"bio"`
+				CustomAvatarURL *string `json:"custom_avatar_url"`
+				CreatedAt       *string `json:"created_at"`
+				UpdatedAt       *string `json:"updated_at"`
+			} `json:"insert_auth_service_user_profiles_one"`
+		}
+		if err := decodeHasuraResponse(resp, &insertResult); err != nil {
+			return nil, err
+		}
+		if insertResult.InsertAuthServiceUserProfilesOne == nil {
+			return nil, fmt.Errorf("insert returned nil")
+		}
+	}
+
+	return GetUserProfileFromHasura(cfg, userID)
 }

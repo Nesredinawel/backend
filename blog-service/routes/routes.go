@@ -28,15 +28,17 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// API v1 - protected by JWT
+	// API v1
 	r.Route("/api/v1", func(r chi.Router) {
-		// Attach JWT middleware
+
+		// Public endpoints (no JWT required)
+		r.Get("/posts", handlers.GetPosts(cfg))
+		r.Get("/posts/external", handlers.GetExternalPosts(cfg))
+		r.Get("/posts/{id}", handlers.GetPost(cfg))
+
+		// Protected endpoints (JWT required)
 		r.Group(func(r chi.Router) {
 			r.Use(middlewares.JWTAuth(cfg))
-
-			// Posts: both can read; only admin can create/update/delete
-			r.Get("/posts", handlers.GetPosts(cfg))
-			r.Get("/posts/{id}", handlers.GetPost(cfg))
 
 			// Admin-only endpoints
 			r.Group(func(r chi.Router) {
@@ -50,12 +52,10 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 
 	// Not found / method not allowed
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		msg := fmt.Sprintf("❌ Route not found: %s %s", r.Method, r.URL.Path)
-		http.Error(w, msg, http.StatusNotFound)
+		utils.WriteJSONError(w, utils.NewNotFoundError(fmt.Sprintf("Route not found: %s %s", r.Method, r.URL.Path)), http.StatusNotFound)
 	})
 	r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
-		msg := fmt.Sprintf("❌ Method not allowed: %s %s", r.Method, r.URL.Path)
-		http.Error(w, msg, http.StatusMethodNotAllowed)
+		utils.WriteJSONError(w, utils.NewBadRequestError(fmt.Sprintf("Method not allowed: %s %s", r.Method, r.URL.Path)), http.StatusMethodNotAllowed)
 	})
 
 	return r
@@ -69,13 +69,14 @@ func PrintRoutes(cfg utils.Config) {
 	serverAddr := fmt.Sprintf("http://localhost:%s", port)
 
 	fmt.Println("========================================")
-	fmt.Printf("🚀 BLOG SERVICE RUNNING ON %s\n", serverAddr)
-	fmt.Println("📡 Available routes:")
-	fmt.Println("  → GET    /healthz")
-	fmt.Println("  → GET    /api/v1/posts           (🔒 JWT required)")
-	fmt.Println("  → GET    /api/v1/posts/{id}      (🔒 JWT required)")
-	fmt.Println("  → POST   /api/v1/posts           (🔒 JWT + admin only)")
-	fmt.Println("  → PUT    /api/v1/posts/{id}      (🔒 JWT + admin only)")
-	fmt.Println("  → DELETE /api/v1/posts/{id}      (🔒 JWT + admin only)")
+	fmt.Printf("BLOG SERVICE RUNNING ON %s\n", serverAddr)
+	fmt.Println("Available routes:")
+	fmt.Println("  GET    /healthz")
+	fmt.Println("  GET    /api/v1/posts            (?category=&limit=&offset=)")
+	fmt.Println("  GET    /api/v1/posts/external   (?tag=&per_page=)")
+	fmt.Println("  GET    /api/v1/posts/{id}")
+	fmt.Println("  POST   /api/v1/posts            (JWT + admin only)")
+	fmt.Println("  PUT    /api/v1/posts/{id}       (JWT + admin only)")
+	fmt.Println("  DELETE /api/v1/posts/{id}       (JWT + admin only)")
 	fmt.Println("========================================")
 }

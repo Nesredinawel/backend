@@ -15,7 +15,10 @@ type Post struct {
 	UserID    string    `json:"user_id"`
 	Title     string    `json:"title"`
 	Content   string    `json:"content"`
+	Excerpt   string    `json:"excerpt"`
+	Category  string    `json:"category"`
 	Tags      any       `json:"tags"`
+	ReadTime  int       `json:"read_time"`
 	Published bool      `json:"published"`
 	Images    []Image   `json:"images"`
 	CreatedAt time.Time `json:"created_at"`

@@ -33,54 +33,67 @@ var reverseMoodMap = map[int]string{
 }
 
 // getMoodScore normalizes a mood string and returns its score
-func getMoodScore(mood string) (int, error) {
+func getMoodScore(mood string) (int, *ServiceError) {
 	mood = strings.TrimSpace(strings.ToLower(mood))
 	if score, ok := moodScoreMap[mood]; ok {
 		return score, nil
 	}
+	err := NewValidationError(
+		fmt.Sprintf("'%s' is not a valid mood", mood),
+		fmt.Sprintf("Allowed moods: %s. Please choose one of the listed moods.", strings.Join(keys(moodScoreMap), ", ")),
+	)
 	log.Printf("⚠️ Invalid mood input: '%s' — allowed: %v", mood, keys(moodScoreMap))
-	return 0, fmt.Errorf("invalid mood: %s", mood)
+	return 0, err
 }
 
 // getMoodFromScore returns the correct mood string for a given score
-func getMoodFromScore(score int) (string, error) {
+func getMoodFromScore(score int) (string, *ServiceError) {
 	if mood, ok := reverseMoodMap[score]; ok {
 		return mood, nil
 	}
+	err := NewValidationError(
+		fmt.Sprintf("Mood score %d is not valid", score),
+		"Valid mood scores are: 2 (Angry), 4 (Not Good!), 6 (Mediocre), 8 (Good), 10 (Very Good). Please provide a score from this range.",
+	)
 	log.Printf("⚠️ Invalid mood_score input: %d — allowed: %v", score, keysInt(reverseMoodMap))
-	return "", fmt.Errorf("invalid mood_score: %d (allowed: 2,4,6,8,10)", score)
+	return "", err
 }
 
 // InsertOrUpdateMood inserts or updates the user's mood for today.
 // User only sends mood_score OR mood — backend ensures both are consistent.
-func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
+func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
 	today := time.Now().Format("2006-01-02")
 
 	// Normalize and validate mood/mood_score consistency
 	var moodText string
 	var moodScore int
-	var err error
 
 	switch {
 	case mood.Mood != "":
-		moodScore, err = getMoodScore(mood.Mood)
+		score, err := getMoodScore(mood.Mood)
 		if err != nil {
 			log.Printf("❌ Mood validation failed: %v | user_id=%s", err, mood.UserID)
-			return "", fmt.Errorf("invalid mood: %v", err)
+			return "", err
 		}
+		moodScore = score
 		moodText = strings.Title(strings.ToLower(mood.Mood))
 
 	case mood.MoodScore != nil:
-		moodText, err = getMoodFromScore(*mood.MoodScore)
+		text, err := getMoodFromScore(*mood.MoodScore)
 		if err != nil {
 			log.Printf("❌ Mood score validation failed: %v | user_id=%s", err, mood.UserID)
-			return "", fmt.Errorf("invalid mood_score: %v", err)
+			return "", err
 		}
+		moodText = text
 		moodScore = *mood.MoodScore
 
 	default:
+		err := NewValidationError(
+			"Missing mood information",
+			"Either a mood name (e.g. 'good', 'angry') or a mood score (2, 4, 6, 8, 10) must be provided.",
+		)
 		log.Printf("❌ Missing input: neither mood nor mood_score provided | user_id=%s", mood.UserID)
-		return "", fmt.Errorf("either mood or mood_score must be provided")
+		return "", err
 	}
 
 	mood.Mood = moodText
@@ -106,7 +119,7 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 				mood_date: $mood_date
 			},
 			on_conflict: {
-				constraint: moods_user_id_mood_date_key,
+				constraint: moods_user_id_mood_date_idx,
 				update_columns: [mood, emoji, note, mood_score, updated_at]
 			}
 		) {
@@ -138,7 +151,10 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("❌ Error sending request to Hasura: %v | user_id=%s", err, mood.UserID)
-		return "", err
+		return "", NewHasuraError(
+			"Failed to save mood due to a database connection error",
+			"The mood service could not reach the database. Please try again later.",
+		)
 	}
 	defer resp.Body.Close()
 
@@ -146,7 +162,10 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("❌ Hasura returned %d for user %s — body: %s", resp.StatusCode, mood.UserID, string(b))
-		return "", fmt.Errorf("hasura returned non-200: %d", resp.StatusCode)
+		return "", NewHasuraError(
+			"Database request failed",
+			fmt.Sprintf("The database returned an unexpected status (%d). Please try again.", resp.StatusCode),
+		)
 	}
 
 	var respData struct {
@@ -162,12 +181,16 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 
 	if err := json.Unmarshal(b, &respData); err != nil {
 		log.Printf("❌ JSON decode failed for Hasura response: %v\nBody: %s | user_id=%s", err, string(b), mood.UserID)
-		return "", err
+		return "", NewServerError("Failed to process the server response. Please try again.")
 	}
 
 	if len(respData.Errors) > 0 {
-		log.Printf("❌ Hasura GraphQL errors for user %s: %v", mood.UserID, respData.Errors)
-		return "", fmt.Errorf("hasura errors: %v", respData.Errors)
+		errMsg := fmt.Sprintf("%v", respData.Errors)
+		log.Printf("❌ Hasura GraphQL errors for user %s: %s", mood.UserID, errMsg)
+		return "", NewHasuraError(
+			"Could not save your mood entry",
+			errMsg,
+		)
 	}
 
 	log.Printf("✅ Mood '%s' (score: %d) saved for user %s on %s (ID: %s)",
@@ -177,7 +200,7 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, error) {
 }
 
 // GetUserMoods fetches all moods for a given user
-func GetUserMoods(cfg Config, userID string) ([]models.Mood, error) {
+func GetUserMoods(cfg Config, userID string) ([]models.Mood, *ServiceError) {
 	query := `
 	query GetMoods($user_id: uuid!) {
 	  mood_service_moods(where: {user_id: {_eq: $user_id}}) {
@@ -208,7 +231,10 @@ func GetUserMoods(cfg Config, userID string) ([]models.Mood, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("❌ Error sending GetUserMoods request: %v | user_id=%s", err, userID)
-		return nil, err
+		return nil, NewHasuraError(
+			"Failed to fetch moods due to a database connection error",
+			"The mood service could not reach the database. Please try again later.",
+		)
 	}
 	defer resp.Body.Close()
 
@@ -223,12 +249,15 @@ func GetUserMoods(cfg Config, userID string) ([]models.Mood, error) {
 
 	if err := json.Unmarshal(b, &respData); err != nil {
 		log.Printf("❌ JSON decode failed in GetUserMoods: %v\nBody: %s | user_id=%s", err, string(b), userID)
-		return nil, err
+		return nil, NewServerError("Failed to process moods data. Please try again.")
 	}
 
 	if len(respData.Errors) > 0 {
 		log.Printf("❌ Hasura GraphQL errors in GetUserMoods for user %s: %v", userID, respData.Errors)
-		return nil, fmt.Errorf("hasura errors: %v", respData.Errors)
+		return nil, NewHasuraError(
+			"Could not retrieve your mood history",
+			"The database encountered an error while fetching your moods. Please try again.",
+		)
 	}
 
 	log.Printf("✅ Retrieved %d moods for user %s", len(respData.Data.Moods), userID)

@@ -14,6 +14,7 @@ func SwaggerUI(specURL string) http.HandlerFunc {
 
 		handler := httpSwagger.Handler(
 			httpSwagger.URL(specURL),
+			httpSwagger.PersistAuthorization(true),
 		)
 		handler.ServeHTTP(w, r)
 	}

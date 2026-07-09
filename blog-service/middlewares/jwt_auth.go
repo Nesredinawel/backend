@@ -2,7 +2,6 @@ package middlewares
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,25 +20,19 @@ const (
 	CtxRole   ctxKey = "role"
 )
 
-type JSONError struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-}
-
-// JWTAuth validates JWT tokens and injects user info into request context
 func JWTAuth(cfg utils.Config) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" {
-				writeJSONError(w, "Missing Authorization header", http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError("Missing authorization header"), http.StatusUnauthorized)
 				log.Println("[JWT] Missing Authorization header")
 				return
 			}
 
 			parts := strings.SplitN(authHeader, " ", 2)
 			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-				writeJSONError(w, "Invalid Authorization format (expected 'Bearer <token>')", http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError("Invalid authorization format. Expected 'Bearer <token>'"), http.StatusUnauthorized)
 				log.Printf("[JWT] Invalid header format: %s\n", authHeader)
 				return
 			}
@@ -52,28 +45,27 @@ func JWTAuth(cfg utils.Config) func(http.Handler) http.Handler {
 				return []byte(cfg.JWTSecret), nil
 			})
 			if err != nil {
-				writeJSONError(w, fmt.Sprintf("Token parse error: %v", err), http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError(fmt.Sprintf("Token parse error: %v", err)), http.StatusUnauthorized)
 				log.Printf("[JWT] Token parse error: %v\n", err)
 				return
 			}
 
 			if !token.Valid {
-				writeJSONError(w, "Invalid or expired token", http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError("Invalid or expired token. Please log in again."), http.StatusUnauthorized)
 				log.Println("[JWT] Token invalid")
 				return
 			}
 
 			claims, ok := token.Claims.(jwt.MapClaims)
 			if !ok {
-				writeJSONError(w, "Invalid token claims", http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError("Invalid token claims"), http.StatusUnauthorized)
 				log.Println("[JWT] Token claims not MapClaims")
 				return
 			}
 
-			// optional expiry check
 			if exp, ok := claims["exp"].(float64); ok {
 				if time.Now().UTC().After(time.Unix(int64(exp), 0)) {
-					writeJSONError(w, "Token expired", http.StatusUnauthorized)
+					utils.WriteJSONError(w, utils.NewAuthError("Token expired. Please log in again."), http.StatusUnauthorized)
 					log.Println("[JWT] Token expired")
 					return
 				}
@@ -81,14 +73,14 @@ func JWTAuth(cfg utils.Config) func(http.Handler) http.Handler {
 
 			hasuraClaimsRaw, ok := claims["https://hasura.io/jwt/claims"]
 			if !ok {
-				writeJSONError(w, "Missing Hasura claims", http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError("Missing Hasura claims in token"), http.StatusUnauthorized)
 				log.Println("[JWT] Missing Hasura claims")
 				return
 			}
 
 			hasuraClaims, ok := hasuraClaimsRaw.(map[string]interface{})
 			if !ok {
-				writeJSONError(w, "Invalid Hasura claims format", http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError("Invalid Hasura claims format in token"), http.StatusUnauthorized)
 				log.Println("[JWT] Hasura claims not map[string]interface{}")
 				return
 			}
@@ -97,7 +89,7 @@ func JWTAuth(cfg utils.Config) func(http.Handler) http.Handler {
 			role, _ := hasuraClaims["x-hasura-default-role"].(string)
 
 			if userID == "" {
-				writeJSONError(w, "Missing user ID in token", http.StatusUnauthorized)
+				utils.WriteJSONError(w, utils.NewAuthError("Missing user ID in token"), http.StatusUnauthorized)
 				log.Println("[JWT] x-hasura-user-id missing")
 				return
 			}
@@ -111,7 +103,6 @@ func JWTAuth(cfg utils.Config) func(http.Handler) http.Handler {
 	}
 }
 
-// AdminOnly ensures only admin role can proceed
 func AdminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		roleVal := r.Context().Value(CtxRole)
@@ -120,18 +111,9 @@ func AdminOnly(next http.Handler) http.Handler {
 			role = roleVal.(string)
 		}
 		if role != "admin" {
-			writeJSONError(w, "admin role required", http.StatusForbidden)
+			utils.WriteJSONError(w, utils.NewAuthError("Admin role required to perform this action"), http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
-	})
-}
-
-func writeJSONError(w http.ResponseWriter, message string, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(JSONError{
-		Success: false,
-		Error:   message,
 	})
 }

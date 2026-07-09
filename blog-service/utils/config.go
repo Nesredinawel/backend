@@ -52,7 +52,7 @@ func LoadConfig() Config {
 		cfg.RedisAddr = "redis:6379"
 	}
 
-	log.Printf("[mood-service] Loaded config: %+v\n", cfg)
+	log.Printf("[blog-service] Loaded config: %+v\n", cfg)
 
 	// Initialize global Redis automatically
 	InitRedis(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)

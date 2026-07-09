@@ -1,42 +1,79 @@
 openapi: 3.0.3
-
 info:
-  title: My Platform API
-  version: 1.0.0
+  title: Good Morning API
+  version: 2.0.0
+  description: |
+    A modern microservices platform for mood tracking, blogging, and personal wellness.
+    All services are accessible through a single API Gateway entry point.
 
-# 🚪 API Gateway (ONLY entry point)
+    ## Authentication
+    Most endpoints require a JWT access token.
+    Obtain one via `POST /auth/email/login` or `GET /auth/google/login`.
+
+    ```
+    Authorization: Bearer <your_access_token>
+    ```
+
+    ## Token Lifecycle
+    | Token | Lifetime |
+    |---|---|
+    | Access Token | 15 minutes |
+    | Refresh Token | 7 days |
+
+  contact:
+    name: Good Morning Team
+  license:
+    name: Proprietary
+
 servers:
   - url: http://localhost:8081
+    description: Local development — API Gateway
+  - url: https://api.goodmorning.app
+    description: Production
 
 tags:
-  - name: Auth
-    description: Authentication and user account management
-  - name: Mood
-    description: Mood tracking service
-  - name: Blog
-    description: Blog posts service
+  - name: Health
+    description: Service health checks
+  - name: Authentication
+    description: Sign up, log in, and manage your account
+  - name: Profile
+    description: Manage your user profile
+  - name: Moods
+    description: Log and analyze your daily mood
+  - name: Analytics
+    description: Mood trends and statistics
+  - name: Posts
+    description: Blog posts (read requires JWT, write requires admin)
   - name: Notifications
-    description: Notification service
+    description: Poll and manage your notifications
+  - name: Realtime
+    description: WebSocket real-time notification stream
 
-components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-
-# 🔐 Default: all endpoints require JWT unless overridden
-security:
-  - bearerAuth: []
+x-tagGroups:
+  - name: Auth Service
+    tags:
+      - Health
+      - Authentication
+      - Profile
+  - name: Mood Service
+    tags:
+      - Moods
+      - Analytics
+  - name: Blog Service
+    tags:
+      - Posts
+  - name: Notification Service
+    tags:
+      - Notifications
+      - Realtime
 
 paths:
-
-  ####################################################
-  # HEALTH
-  ####################################################
+  # ────────────────────────────────────────────
+  #  HEALTH
+  # ────────────────────────────────────────────
   /healthz:
     get:
-      tags: [Auth]
+      tags: [Health]
       summary: Health check
       security: []
       responses:
@@ -46,15 +83,18 @@ paths:
             text/plain:
               schema:
                 type: string
-                example: ok
+                example: api-gateway ok
 
-  ####################################################
-  # AUTH SERVICE
-  ####################################################
+  # ────────────────────────────────────────────
+  #  AUTH — public
+  # ────────────────────────────────────────────
   /auth/email/signup:
     post:
-      tags: [Auth]
-      summary: Signup with email & password
+      tags: [Authentication]
+      summary: Register with email
+      description: |
+        Creates a new user account with email and password.
+        A verification email is sent to the provided address (valid for 15 minutes).
       security: []
       requestBody:
         required: true
@@ -64,31 +104,124 @@ paths:
               type: object
               required: [name, email, password]
               properties:
-                name: { type: string, example: Suzz Doe }
-                email: { type: string, example: suzzcreative@example.com }
-                password: { type: string, example: StrongPassword123 }
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                  example: Jane Doe
+                email:
+                  type: string
+                  format: email
+                  example: jane@example.com
+                password:
+                  type: string
+                  minLength: 8
+                  maxLength: 128
+                  example: SecurePass123
       responses:
-        "201":
-          description: Signup initiated
+        "200":
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Account created successfully.
+                  user_id:
+                    type: string
+                    format: uuid
+        "409":
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: user with this email already exists
 
   /auth/email/verify:
     get:
-      tags: [Auth]
-      summary: Verify email
+      tags: [Authentication]
+      summary: Verify email address
+      description: Completes email verification using the token from the email link.
       security: []
       parameters:
         - name: token
           in: query
           required: true
-          schema: { type: string }
+          schema:
+            type: string
+            format: uuid
+          description: Verification token from email link
       responses:
         "200":
-          description: Email verified
+          description: Email verified successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Email verified (demo mode).
+
+  /auth/google/login:
+    get:
+      tags: [Authentication]
+      summary: Google OAuth login
+      description: Redirects the browser to Google's OAuth consent screen.
+      security: []
+      responses:
+        "307":
+          description: Redirect to Google OAuth consent screen
+
+  /auth/google/callback:
+    get:
+      tags: [Authentication]
+      summary: Google OAuth callback
+      description: |
+        Handles the OAuth callback from Google.
+        Exchanges the authorization code for tokens and returns a JWT session.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Authorization code from Google
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+          description: OAuth state parameter for CSRF protection
+      responses:
+        "200":
+          description: Google login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
 
   /auth/email/login:
     post:
-      tags: [Auth]
-      summary: Login with email & password
+      tags: [Authentication]
+      summary: Login with email
+      description: Authenticates with email and password, returns JWT session.
       security: []
       requestBody:
         required: true
@@ -98,57 +231,74 @@ paths:
               type: object
               required: [email, password]
               properties:
-                email: { type: string }
-                password: { type: string }
+                email:
+                  type: string
+                  format: email
+                  example: jane@example.com
+                password:
+                  type: string
+                  example: SecurePass123
       responses:
         "200":
           description: Login successful
           content:
             application/json:
               schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
                 type: object
                 properties:
-                  access_token: { type: string }
-                  refresh_token: { type: string }
-                  expires_in: { type: integer }
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+                    example: invalid email or password
 
-  /auth/google/login:
-    get:
-      tags: [Auth]
-      summary: Google OAuth login
-      security: []
-      responses:
-        "302":
-          description: Redirect to Google
-
-  /auth/google/callback:
-    get:
-      tags: [Auth]
-      summary: Google OAuth callback
-      security: []
-      parameters:
-        - name: code
-          in: query
-          required: true
-          schema: { type: string }
-      responses:
-        "200":
-          description: Google login success
-
-  ####################################################
-  # USER PROFILE (JWT REQUIRED)
-  ####################################################
+  # ────────────────────────────────────────────
+  #  PROFILE — JWT required
+  # ────────────────────────────────────────────
   /user/profile:
     get:
-      tags: [Auth]
+      tags: [Profile]
       summary: Get my profile
+      description: Returns the authenticated user's profile information.
+      security:
+        - bearerAuth: []
       responses:
         "200":
-          description: User profile returned
-
+          description: Profile retrieved successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  profile:
+                    $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
     put:
-      tags: [Auth]
+      tags: [Profile]
       summary: Update my profile
+      description: Updates the authenticated user's bio and/or custom avatar.
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -156,19 +306,71 @@ paths:
             schema:
               type: object
               properties:
-                bio: { type: string }
-                custom_avatar_url: { type: string }
+                bio:
+                  type: string
+                  maxLength: 500
+                  nullable: true
+                  description: Short biography
+                  example: Full-stack developer & coffee enthusiast
+                custom_avatar_url:
+                  type: string
+                  format: uri
+                  nullable: true
+                  description: Custom avatar image URL
+                  example: https://storage.example.com/avatars/me.jpg
       responses:
         "200":
-          description: Profile updated
+          description: Profile updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  profile:
+                    $ref: "#/components/schemas/UserProfile"
+                  message:
+                    type: string
+                    example: Profile updated successfully
+        "400":
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
+        "401":
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: false
+                  error:
+                    type: string
 
-  ####################################################
-  # MOOD SERVICE
-  ####################################################
+  # ────────────────────────────────────────────
+  #  MOOD SERVICE
+  # ────────────────────────────────────────────
   /api/v1/moods:
     post:
-      tags: [Mood]
-      summary: Create or update today's mood
+      tags: [Moods]
+      summary: Log today's mood
+      description: |
+        Creates or updates today's mood entry (upsert by date).
+        Provide either `mood` (text label) or `mood_score` (numeric);
+        the backend resolves both fields into a consistent pair.
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
@@ -176,47 +378,290 @@ paths:
             schema:
               type: object
               properties:
-                mood: { type: string }
-                mood_score: { type: integer }
-                note: { type: string }
+                mood:
+                  type: string
+                  enum: [angry, "not good", mediocre, good, "very good"]
+                  description: Mood label (omit if using mood_score)
+                  example: good
+                mood_score:
+                  type: integer
+                  enum: [2, 4, 6, 8, 10]
+                  description: Numeric score (omit if using mood)
+                  example: 8
+                emoji:
+                  type: string
+                  description: Optional emoji
+                  example: "😊"
+                note:
+                  type: string
+                  maxLength: 1000
+                  description: Optional note about the day
+                  example: Had a productive day at work!
+                mood_date:
+                  type: string
+                  format: date
+                  description: Date in YYYY-MM-DD (defaults to today)
+                  example: "2026-07-09"
       responses:
         "200":
-          description: Mood saved
-
+          description: Mood saved (created or updated)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  mood_id:
+                    type: string
+                    format: uuid
+                    example: 550e8400-e29b-41d4-a716-446655440000
+                  message:
+                    type: string
+                    example: Mood saved successfully
     get:
-      tags: [Mood]
+      tags: [Moods]
       summary: Get my moods
+      description: Returns all mood entries for the authenticated user.
+      security:
+        - bearerAuth: []
       responses:
         "200":
-          description: Mood list returned
+          description: Mood list retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  moods:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Mood"
 
   /api/v1/moods/analytics:
     get:
-      tags: [Mood]
-      summary: Mood analytics
+      tags: [Analytics]
+      summary: Mood analytics & KPIs
+      description: |
+        Returns aggregated mood analytics for a date range.
+        Includes average score, total entries, breakdown by mood, and daily time series.
+      security:
+        - bearerAuth: []
       parameters:
         - name: range
           in: query
           schema:
             type: string
             enum: [week, month]
+          description: Predefined range (defaults to week)
+          example: week
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Custom start date (YYYY-MM-DD)
+          example: "2026-07-01"
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Custom end date (YYYY-MM-DD)
+          example: "2026-07-09"
       responses:
         "200":
-          description: Analytics returned
+          description: Analytics calculated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  from:
+                    type: string
+                    format: date
+                    example: "2026-07-07"
+                  to:
+                    type: string
+                    format: date
+                    example: "2026-07-13"
+                  avg_score:
+                    type: number
+                    format: float
+                    example: 7.2
+                  total_entries:
+                    type: integer
+                    example: 5
+                  counts_by_mood:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        mood:
+                          type: string
+                          example: good
+                        count:
+                          type: integer
+                          example: 3
+                  time_series:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        date:
+                          type: string
+                          format: date
+                          example: "2026-07-07"
+                        avg_score:
+                          type: number
+                          format: float
+                          example: 8.0
+                        count:
+                          type: integer
+                          example: 1
 
-  ####################################################
-  # BLOG SERVICE
-  ####################################################
-  /blog:
+  # ────────────────────────────────────────────
+  #  BLOG SERVICE
+  # ────────────────────────────────────────────
+  /api/v1/posts:
     get:
-      tags: [Blog]
+      tags: [Posts]
       summary: List blog posts
+      description: |
+        Returns all blog posts. Non-admin users only see published posts;
+        admins see all posts including drafts.
+      security:
+        - bearerAuth: []
       responses:
-        "200": { description: OK }
-
+        "200":
+          description: Posts retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  posts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/BlogPost"
     post:
-      tags: [Blog]
-      summary: Create blog post
+      tags: [Posts]
+      summary: Create a blog post
+      description: Creates a new blog post. Admin role required.
+      security:
+        - bearerAuth: []
+      x-requires-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content, published]
+              properties:
+                title:
+                  type: string
+                  maxLength: 255
+                  example: Getting Started with Go
+                content:
+                  type: string
+                  description: Full post content (markdown supported)
+                  example: "Go is a statically typed, compiled programming language..."
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  example: [go, programming, backend]
+                published:
+                  type: boolean
+                  example: true
+                images:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                        example: https://storage.example.com/blog/img.jpg
+                      caption:
+                        type: string
+                        example: Go Gopher illustration
+      responses:
+        "200":
+          description: Post created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  post_id:
+                    type: string
+                    format: uuid
+                    example: 550e8400-e29b-41d4-a716-446655440000
+        "403":
+          description: Forbidden — admin role required
+
+  /api/v1/posts/{id}:
+    get:
+      tags: [Posts]
+      summary: Get a blog post
+      description: |
+        Returns a single blog post by ID.
+        Unpublished posts are only visible to admin users.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Post UUID
+      responses:
+        "200":
+          description: Post retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  post:
+                    $ref: "#/components/schemas/BlogPost"
+        "403":
+          description: Forbidden — post not published and user is not admin
+    put:
+      tags: [Posts]
+      summary: Update a blog post
+      description: Updates an existing blog post. Admin role required.
+      security:
+        - bearerAuth: []
+      x-requires-role: admin
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Post UUID
       requestBody:
         required: true
         content:
@@ -224,58 +669,432 @@ paths:
             schema:
               type: object
               properties:
-                title: { type: string }
-                content: { type: string }
+                title:
+                  type: string
+                  maxLength: 255
+                  example: Updated Title
+                content:
+                  type: string
+                  example: Updated content here...
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  example: [updated, blog]
+                published:
+                  type: boolean
+                  example: true
+                images:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                      caption:
+                        type: string
       responses:
-        "201": { description: Created }
-
-  /blog/{id}:
-    get:
-      tags: [Blog]
-      summary: Get blog post
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200": { description: OK }
-
-    put:
-      tags: [Blog]
-      summary: Update blog post
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        "200": { description: Updated }
-
+        "200":
+          description: Post updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "403":
+          description: Forbidden — admin role required
     delete:
-      tags: [Blog]
-      summary: Delete blog post
+      tags: [Posts]
+      summary: Delete a blog post
+      description: Deletes a blog post by ID. Admin role required.
+      security:
+        - bearerAuth: []
+      x-requires-role: admin
       parameters:
         - name: id
           in: path
           required: true
-          schema: { type: string }
+          schema:
+            type: string
+            format: uuid
+          description: Post UUID
       responses:
-        "200": { description: Deleted }
+        "200":
+          description: Post deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+        "403":
+          description: Forbidden — admin role required
 
-  ####################################################
-  # NOTIFICATIONS
-  ####################################################
+  # ────────────────────────────────────────────
+  #  NOTIFICATION SERVICE
+  # ────────────────────────────────────────────
   /notifications:
     get:
       tags: [Notifications]
       summary: Get notifications
+      description: Retrieves all notifications for a user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User UUID
       responses:
-        "200": { description: OK }
+        "200":
+          description: Notifications retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  user_id:
+                    type: string
+                    format: uuid
+                  total:
+                    type: integer
+                    example: 5
+                  unread_count:
+                    type: integer
+                    example: 2
+                  notifications:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Notification"
+                  message:
+                    type: string
+                    example: Notifications fetched successfully
+
+  /notifications/count:
+    get:
+      tags: [Notifications]
+      summary: Get unread count
+      description: Returns the count of unread notifications for a user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User UUID
+      responses:
+        "200":
+          description: Unread count retrieved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  user_id:
+                    type: string
+                    format: uuid
+                  unread_count:
+                    type: integer
+                    example: 2
+                  message:
+                    type: string
+                    example: Unread notification count fetched successfully
 
   /notifications/mark-read:
     post:
       tags: [Notifications]
-      summary: Mark notifications as read
+      summary: Mark notification as read
+      description: Marks a single notification as read for a user.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: user_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: User UUID
+        - name: id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: Notification UUID to mark as read
       responses:
-        "200": { description: Updated }
+        "200":
+          description: Notification marked as read
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  user_id:
+                    type: string
+                    format: uuid
+                  notification_id:
+                    type: string
+                    format: uuid
+                  unread_count:
+                    type: integer
+                    example: 1
+                  message:
+                    type: string
+                    example: Notification marked as read
+
+  /ws:
+    get:
+      tags: [Realtime]
+      summary: WebSocket real-time notifications
+      description: |
+        Upgrades to a WebSocket connection for real-time push notifications.
+        - Authenticate via JWT in the `Authorization` header during handshake.
+        - On connect, all existing notifications are sent.
+        - New notifications are pushed in real-time.
+        - Keepalive pings every 60 seconds.
+      security:
+        - bearerAuth: []
+      responses:
+        "101":
+          description: Switching Protocols — WebSocket connection established
+        "401":
+          description: Unauthorized — invalid or missing JWT
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT access token.
+        Obtain one via `POST /auth/email/login` or `GET /auth/google/callback`.
+        Format: `Authorization: Bearer <token>`
+
+  schemas:
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwIiwicm9sZSI6InVzZXIiLCJleHAiOjk5OTk5OTk5OTl9.dGhpcyBpcyBhIGZha2Ugc2lnbmF0dXJlIGZvciBkZW1v
+        refresh_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNTUwZTg0MDAtZTI5Yi00MWQ0LWE3MTYtNDQ2NjU1NDQwMDAwIiwicm9sZSI6InVzZXIiLCJ0eXBlIjoicmVmcmVzaCIsImV4cCI6OTk5OTk5OTk5OX0.cmVmcmVzaC1zaWduYXR1cmUtZm9yLWRlbW8
+        expires_in:
+          type: integer
+          example: 900
+        user:
+          type: object
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            name:
+              type: string
+            avatar_url:
+              type: string
+              format: uri
+              nullable: true
+            provider:
+              type: string
+              enum: [local, google]
+            role:
+              type: string
+              enum: [user, admin]
+
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Profile record ID
+        user_id:
+          type: string
+          format: uuid
+          description: Associated user ID
+        name:
+          type: string
+          description: User's display name
+          example: Jane Doe
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: jane@example.com
+        avatar_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Profile avatar URL
+          example: https://storage.example.com/avatars/me.jpg
+        bio:
+          type: string
+          nullable: true
+          example: Full-stack developer & coffee enthusiast
+        custom_avatar_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Custom profile image URL
+          example: https://storage.example.com/avatars/me.jpg
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Mood:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        mood:
+          type: string
+          example: Good
+        mood_score:
+          type: integer
+          example: 8
+        emoji:
+          type: string
+          nullable: true
+          example: "😊"
+        note:
+          type: string
+          nullable: true
+          example: Had a productive day at work!
+        mood_date:
+          type: string
+          format: date
+          example: "2026-07-09"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BlogPost:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: Getting Started with Go
+        content:
+          type: string
+          example: "Go is a statically typed, compiled programming language..."
+        tags:
+          type: array
+          items:
+            type: string
+          example: [go, programming, backend]
+        published:
+          type: boolean
+          example: true
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/PostImage"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PostImage:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        post_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+          example: https://storage.example.com/blog/img.jpg
+        caption:
+          type: string
+          nullable: true
+          example: Go Gopher illustration
+        created_at:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          example: Login Successful
+        message:
+          type: string
+          example: jane@example.com logged in
+        source_service:
+          type: string
+          example: auth-service
+        action:
+          type: string
+          nullable: true
+          example: USER_LOGIN
+        meta:
+          type: object
+          nullable: true
+          description: Optional extra payload
+        read:
+          type: boolean
+          example: false
+        created_at:
+          type: string
+          format: date-time
+
+security:
+  - bearerAuth: []

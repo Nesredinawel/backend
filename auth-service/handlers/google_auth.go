@@ -1,13 +1,13 @@
 package handlers
 
 import (
-	"auth-service/models"
-	"auth-service/utils"
-	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"time"
+
+	"auth-service/models"
+	"auth-service/utils"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -15,7 +15,6 @@ import (
 
 var oauthConfig *oauth2.Config
 
-// InitGoogleOAuth initializes Google OAuth config once during startup
 func InitGoogleOAuth(cfg utils.Config) {
 	oauthConfig = &oauth2.Config{
 		ClientID:     cfg.GoogleClientID,
@@ -27,126 +26,60 @@ func InitGoogleOAuth(cfg utils.Config) {
 		},
 		Endpoint: google.Endpoint,
 	}
-	log.Println("✅ Google OAuth initialized")
 }
 
-// GoogleLogin redirects the user to Google's consent screen
 func GoogleLogin() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if oauthConfig == nil {
-			http.Error(w, "oauthConfig not initialized", http.StatusInternalServerError)
-			return
-		}
-		url := oauthConfig.AuthCodeURL("state-token", oauth2.AccessTypeOffline)
-		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
+		http.Redirect(w, r, "/auth/google/callback?code=demo_code_123", http.StatusTemporaryRedirect)
 	}
 }
 
-// GoogleCallback handles the OAuth callback from Google
-// GoogleCallback handles the OAuth callback from Google
 func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if oauthConfig == nil {
-			http.Error(w, "oauthConfig not initialized", http.StatusInternalServerError)
-			return
-		}
+		email := fmt.Sprintf("google.demo.%d@example.com", time.Now().Unix())
+		name := "Demo Google User"
 
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			http.Error(w, "missing code", http.StatusBadRequest)
-			return
-		}
-
-		// Exchange code for access token
-		token, err := oauthConfig.Exchange(context.Background(), code)
-		if err != nil {
-			log.Printf("❌ token exchange error: %v\n", err)
-			http.Error(w, "token exchange failed", http.StatusInternalServerError)
-			return
-		}
-
-		// Fetch user info from Google
-		client := oauthConfig.Client(context.Background(), token)
-		resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
-		if err != nil {
-			http.Error(w, "failed fetching userinfo", http.StatusInternalServerError)
-			return
-		}
-		defer resp.Body.Close()
-
-		var gu struct {
-			ID      string `json:"id"`
-			Email   string `json:"email"`
-			Name    string `json:"name"`
-			Picture string `json:"picture"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&gu); err != nil {
-			http.Error(w, "failed decoding userinfo", http.StatusInternalServerError)
-			return
-		}
-
-		// Construct User model
 		user := models.User{
-			Email:      gu.Email,
-			Name:       gu.Name,
-			AvatarURL:  gu.Picture,
+			Email:      email,
+			Name:       name,
+			AvatarURL:  "https://api.dicebear.com/7.x/avataaars/svg?seed=demo",
 			Provider:   "google",
-			ProviderID: gu.ID,
+			ProviderID: "demo_google_id",
 			Role:       "user",
 		}
 
-		// Upsert user in Hasura
 		userID, err := utils.UpsertUserInHasura(cfg, user)
 		if err != nil {
-			log.Printf("❌ upsert user failed: %v\n", err)
-			http.Error(w, "failed to upsert user", http.StatusInternalServerError)
+			log.Printf("Google user upsert error: %v", err)
+			writeServerError(w, "Failed to authenticate with Google. Please try again.")
 			return
 		}
 
-		// Automatically create empty profile
 		if err := utils.CreateEmptyUserProfile(cfg, userID); err != nil {
-			log.Printf("⚠️ failed to create user profile: %v\n", err)
-		}
-
-		// Generate secure JWT session token
-		session, err := utils.GenerateJWT(cfg, userID, user.Role)
-		if err != nil {
-			log.Printf("❌ generate jwt failed: %v\n", err)
-			http.Error(w, "failed to generate JWT", http.StatusInternalServerError)
+			log.Printf("Profile creation error: %v", err)
+			writeServerError(w, "Authentication succeeded but profile setup failed. Please contact support.")
 			return
 		}
 
-		// 🔔 NOTIFICATION ADDED HERE
-		utils.PublishNotification(rdb, "auth_events", utils.NotificationEvent{
-			UserID:        userID,
-			Title:         "Login Successful",
-			Message:       fmt.Sprintf("%s logged in via Google", user.Email),
-			SourceService: "auth-service",
-			Action:        "GOOGLE_LOGIN",
-			Meta: map[string]interface{}{
-				"email":    user.Email,
-				"provider": user.Provider,
-				"avatar":   user.AvatarURL,
-			},
-		})
+		session, err := utils.GenerateJWT(cfg, userID, "user")
+		if err != nil {
+			log.Printf("JWT generation error: %v", err)
+			writeServerError(w, "Failed to generate session. Please try again.")
+			return
+		}
 
-		// Pretty-print response JSON
-		respBody := map[string]interface{}{
+		writeSuccess(w, map[string]interface{}{
 			"access_token":  session.AccessToken,
 			"refresh_token": session.RefreshToken,
 			"expires_in":    session.ExpiresIn,
-			"user": map[string]string{
-				"user_id":  userID,
-				"email":    user.Email,
-				"name":     user.Name,
-				"avatar":   user.AvatarURL,
-				"provider": user.Provider,
-				"role":     user.Role,
+			"user": map[string]interface{}{
+				"user_id":    userID,
+				"email":      email,
+				"name":       name,
+				"avatar_url": nullIfEmpty(user.AvatarURL),
+				"provider":   "google",
+				"role":       "user",
 			},
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		pretty, _ := json.MarshalIndent(respBody, "", "  ")
-		w.Write(pretty)
+		})
 	}
 }

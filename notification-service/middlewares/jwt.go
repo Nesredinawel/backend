@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"notification-service/config"
+	"notification-service/utils"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -21,25 +21,18 @@ const (
 	CtxRole   ctxKey = "role"
 )
 
-// JSONError is the structure for error responses
-type JSONError struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error"`
-}
-
-// JWTAuthMiddleware validates JWT and injects user info into context
 func JWTAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			writeJSONError(w, "Missing Authorization header", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Missing authorization header"), http.StatusUnauthorized)
 			log.Println("[JWT] Missing Authorization header")
 			return
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
-			writeJSONError(w, "Invalid Authorization header format", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Invalid authorization format. Expected 'Bearer <token>'"), http.StatusUnauthorized)
 			log.Printf("[JWT] Invalid header format: %s\n", authHeader)
 			return
 		}
@@ -53,38 +46,36 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 			return []byte(cfg.JWTSecret), nil
 		})
 		if err != nil {
-			writeJSONError(w, fmt.Sprintf("Token parse error: %v", err), http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError(fmt.Sprintf("Token parse error: %v", err)), http.StatusUnauthorized)
 			log.Printf("[JWT] Token parse error: %v\n", err)
 			return
 		}
 
 		if !token.Valid {
-			writeJSONError(w, "Invalid or expired token", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Invalid or expired token. Please log in again."), http.StatusUnauthorized)
 			log.Println("[JWT] Token invalid or expired")
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			writeJSONError(w, "Invalid token claims", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Invalid token claims"), http.StatusUnauthorized)
 			log.Println("[JWT] Token claims not MapClaims")
 			return
 		}
 
-		// Validate expiration
 		exp, ok := claims["exp"].(float64)
 		if !ok {
-			writeJSONError(w, "'exp' claim missing or invalid", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Invalid token: missing expiration"), http.StatusUnauthorized)
 			log.Println("[JWT] 'exp' claim missing or invalid")
 			return
 		}
 		if time.Unix(int64(exp), 0).Before(time.Now()) {
-			writeJSONError(w, "Token expired", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Token expired. Please log in again."), http.StatusUnauthorized)
 			log.Printf("[JWT] Token expired at %v", time.Unix(int64(exp), 0))
 			return
 		}
 
-		// Extract user ID and role
 		var userID, role string
 
 		if uid, ok := claims["user_id"].(string); ok && uid != "" {
@@ -109,11 +100,10 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 
 		if userID == "" {
 			log.Printf("[JWT] Could not extract user_id from token claims. Full claims: %+v", claims)
-			writeJSONError(w, "Invalid token payload", http.StatusUnauthorized)
+			utils.WriteJSONError(w, utils.NewAuthError("Invalid token payload: missing user ID"), http.StatusUnauthorized)
 			return
 		}
 
-		// Inject into context
 		ctx := context.WithValue(r.Context(), CtxUserID, userID)
 		ctx = context.WithValue(ctx, CtxRole, role)
 		log.Printf("[JWT] Valid token for user: %s, role: %s", userID, role)
@@ -122,23 +112,12 @@ func JWTAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// Helper to extract user ID from context
 func GetUserIDFromContext(r *http.Request) string {
 	id, _ := r.Context().Value(CtxUserID).(string)
 	return id
 }
 
-// Helper to extract role from context
 func GetRoleFromContext(r *http.Request) string {
 	role, _ := r.Context().Value(CtxRole).(string)
 	return role
-}
-
-func writeJSONError(w http.ResponseWriter, message string, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(JSONError{
-		Success: false,
-		Error:   message,
-	})
 }
