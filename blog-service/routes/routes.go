@@ -80,5 +80,8 @@ func PrintRoutes(cfg utils.Config) {
 	fmt.Println("  POST   /api/v1/posts            (JWT + admin only)")
 	fmt.Println("  PUT    /api/v1/posts/{id}       (JWT + admin only)")
 	fmt.Println("  DELETE /api/v1/posts/{id}       (JWT + admin only)")
+	fmt.Println("  ──────────────────────────────────────")
+	fmt.Println("  Admin: admin@goodmorning.app / admin123")
+	fmt.Println("  Gen token: go run ./tools token <secret> <user_id> admin")
 	fmt.Println("========================================")
 }
