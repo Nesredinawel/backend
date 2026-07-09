@@ -20,9 +20,9 @@ type Config struct {
 	GoogleClientSecret string
 	GoogleRedirectURL  string
 
-	// 💌 Email Verification (Resend)
+	// 💌 Email Verification (Resend / Brevo)
 	ResendAPIKey  string
-	PublicBaseURL string // e.g. "http://localhost:8081"
+	PublicBaseURL string
 
 	// 🧠 Redis
 	RedisAddr     string

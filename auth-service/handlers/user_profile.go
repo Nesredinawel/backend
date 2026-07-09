@@ -17,9 +17,9 @@ func GetUserProfile(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		profile, err := utils.GetUserProfileFromHasura(cfg, userID)
-		if err != nil {
-			log.Printf("Profile fetch error for user %s: %v", userID, err)
+		profile, svcErr := utils.GetUserProfileFromHasura(cfg, userID)
+		if svcErr != nil {
+			log.Printf("Profile fetch error for user %s: %v", userID, svcErr)
 			writeServerError(w, "Failed to fetch profile. Please try again.")
 			return
 		}
@@ -44,9 +44,9 @@ func UpdateUserProfile(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		profile, err := utils.UpdateUserProfileInHasura(cfg, userID, input)
-		if err != nil {
-			log.Printf("Profile update error for user %s: %v", userID, err)
+		profile, svcErr := utils.UpdateUserProfileInHasura(cfg, userID, input)
+		if svcErr != nil {
+			log.Printf("Profile update error for user %s: %v", userID, svcErr)
 			writeServerError(w, "Failed to update profile. Please try again.")
 			return
 		}
