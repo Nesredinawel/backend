@@ -52,7 +52,7 @@ services:
         fromService:
           name: hasura
           type: web
-          property: hostPort
+          property: hostport
       - key: HASURA_GRAPHQL_ADMIN_SECRET
         sync: false
 
