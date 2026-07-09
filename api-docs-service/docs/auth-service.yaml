@@ -4,14 +4,12 @@ info:
   version: 1.0.0
   description: |
     Authentication & user profile management.
-    Supports email/password and Google OAuth2 sign-in flows.
-    Issues JWT access tokens (15 min) and refresh tokens (7 days).
+    Supports email/password (with email verification via Brevo) and Google OAuth2 sign-in flows.
+    Issues Hasura-compatible JWT access tokens (15 min) and refresh tokens (7 days).
 
 servers:
   - url: http://localhost:8081
     description: API Gateway (production)
-  - url: http://localhost:8081
-    description: Direct auth-service access (development)
 
 tags:
   - name: Health
@@ -41,8 +39,9 @@ paths:
       tags: [Authentication]
       summary: Register with email
       description: |
-        Creates a new user account with email and password.
-        A verification email is sent to the provided address (valid for 15 minutes).
+        Initiates email signup. Sends a verification email (via Brevo) with a
+        one-time token (valid for 15 minutes). The user must click the link
+        to complete registration.
       security: []
       requestBody:
         required: true
@@ -68,30 +67,34 @@ paths:
                   example: SecurePass123
       responses:
         "200":
-          description: Signup initiated — verification email sent
+          description: Verification email sent
           content:
             application/json:
               schema:
                 type: object
                 properties:
+                  success:
+                    type: boolean
+                    example: true
                   message:
                     type: string
-                    example: Check your email to confirm signup. Link valid for 15 minutes.
+                    example: Verification email sent. Please check your inbox.
+                  email:
+                    type: string
+                    example: jane@example.com
+        "400":
+          description: Invalid input (missing fields, bad JSON)
         "409":
-          description: User already exists
-          content:
-            text/plain:
-              schema:
-                type: string
-                example: user already exists
+          description: Email already registered
 
   /auth/email/verify:
     get:
       tags: [Authentication]
       summary: Verify email address
       description: |
-        Completes email verification using the token sent to the user's email.
-        Creates the user account in the database.
+        Completes email verification. Looks up the pending signup in Redis,
+        creates the user in the database, creates an empty profile, and
+        removes the token.
       security: []
       parameters:
         - name: token
@@ -99,8 +102,7 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
-          description: Verification token from email link
+          description: One-time verification token (hex-encoded 32 bytes)
       responses:
         "200":
           description: Email verified successfully
@@ -109,19 +111,26 @@ paths:
               schema:
                 type: object
                 properties:
+                  success:
+                    type: boolean
+                    example: true
                   message:
                     type: string
-                    example: Email verified successfully.
+                    example: Email verified successfully. You can now log in.
                   user_id:
                     type: string
                     format: uuid
                     example: 550e8400-e29b-41d4-a716-446655440000
+        "400":
+          description: Invalid or expired token
 
   /auth/email/login:
     post:
       tags: [Authentication]
       summary: Login with email
-      description: Authenticates with email and password, returns JWT session.
+      description: |
+        Authenticates with email and hashed password.
+        Returns a JWT session (access + refresh tokens) and user info.
       security: []
       requestBody:
         required: true
@@ -146,6 +155,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  success:
+                    type: boolean
+                    example: true
                   access_token:
                     type: string
                     example: eyJhbGciOiJIUzI1NiIs...
@@ -166,25 +178,25 @@ paths:
                         format: email
                       name:
                         type: string
+                      avatar_url:
+                        type: string
+                        nullable: true
                       provider:
                         type: string
                         enum: [local, google]
                       role:
                         type: string
                         enum: [user, admin]
-        "403":
-          description: Account uses Google login
-          content:
-            text/plain:
-              schema:
-                type: string
-                example: this account uses Google login
+        "401":
+          description: Invalid email or password
 
   /auth/google/login:
     get:
       tags: [Authentication]
       summary: Google OAuth login
-      description: Redirects the browser to Google's OAuth consent screen.
+      description: |
+        Redirects the browser to Google's OAuth consent screen with
+        a randomly generated state parameter for CSRF protection.
       security: []
       responses:
         "307":
@@ -195,9 +207,10 @@ paths:
       tags: [Authentication]
       summary: Google OAuth callback
       description: |
-        Handles the OAuth callback from Google.
-        Exchanges the authorization code for tokens, fetches the user's Google profile,
-        upserts the user in the database, and returns a JWT session.
+        Handles the OAuth callback from Google. Exchanges the authorization
+        code for an access token, fetches user info from Google's userinfo
+        endpoint, upserts the user in the database, creates an empty profile,
+        and returns a JWT session.
       security: []
       parameters:
         - name: code
@@ -220,6 +233,9 @@ paths:
               schema:
                 type: object
                 properties:
+                  success:
+                    type: boolean
+                    example: true
                   access_token:
                     type: string
                     example: eyJhbGciOiJIUzI1NiIs...
@@ -240,21 +256,24 @@ paths:
                         format: email
                       name:
                         type: string
-                      avatar:
+                      avatar_url:
                         type: string
                         format: uri
+                        nullable: true
                       provider:
                         type: string
                         example: google
                       role:
                         type: string
                         example: user
+        "400":
+          description: Missing authorization code
 
   /user/profile:
     get:
       tags: [Profile]
       summary: Get my profile
-      description: Returns the authenticated user's profile information.
+      description: Returns the authenticated user's profile information (name, email, avatar, bio).
       security:
         - bearerAuth: []
       responses:
@@ -263,14 +282,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserProfile"
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  profile:
+                    $ref: "#/components/schemas/UserProfile"
         "401":
           description: Missing or invalid JWT
 
     put:
       tags: [Profile]
       summary: Update my profile
-      description: Updates the authenticated user's bio and/or avatar.
+      description: Updates the authenticated user's bio and/or custom avatar URL.
       security:
         - bearerAuth: []
       requestBody:
@@ -283,11 +308,13 @@ paths:
                 bio:
                   type: string
                   maxLength: 500
+                  nullable: true
                   description: Short biography
                   example: Full-stack developer & coffee enthusiast
                 custom_avatar_url:
                   type: string
                   format: uri
+                  nullable: true
                   description: Custom avatar image URL
                   example: https://storage.example.com/avatars/me.jpg
       responses:
@@ -296,7 +323,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/UserProfile"
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Profile updated successfully
+                  profile:
+                    $ref: "#/components/schemas/UserProfile"
+        "400":
+          description: Invalid request body
+        "401":
+          description: Missing or invalid JWT
 
 components:
   securitySchemes:
@@ -315,11 +355,24 @@ components:
         id:
           type: string
           format: uuid
-          description: Profile record ID
+          nullable: true
+          description: Profile record ID (null if not yet set)
         user_id:
           type: string
           format: uuid
           description: Associated user ID
+        name:
+          type: string
+          description: User's display name
+        email:
+          type: string
+          format: email
+          description: User's email address
+        avatar_url:
+          type: string
+          format: uri
+          nullable: true
+          description: Avatar from OAuth provider
         bio:
           type: string
           nullable: true
@@ -332,9 +385,11 @@ components:
         created_at:
           type: string
           format: date-time
+          nullable: true
         updated_at:
           type: string
           format: date-time
+          nullable: true
 
 security:
   - bearerAuth: []
