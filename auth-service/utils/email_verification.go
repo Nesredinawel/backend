@@ -25,9 +25,7 @@ func GenerateVerificationToken() (string, error) {
 		log.Println("❌ Failed to generate verification token:", err)
 		return "", err
 	}
-	token := hex.EncodeToString(b)
-	log.Println("🔑 Generated verification token:", token)
-	return token, nil
+	return hex.EncodeToString(b), nil
 }
 
 // SavePendingSignup stores signup data in Redis temporarily

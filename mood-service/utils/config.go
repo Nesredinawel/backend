@@ -52,7 +52,8 @@ func LoadConfig() Config {
 		cfg.RedisAddr = "redis:6379"
 	}
 
-	log.Printf("[mood-service] Loaded config: %+v\n", cfg)
+	log.Printf("[mood-service] Loaded config (redacted): Port=%s HasuraEndpoint=%s RedisAddr=%s",
+		cfg.Port, cfg.HasuraEndpoint, cfg.RedisAddr)
 
 	// Initialize global Redis automatically
 	InitRedis(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)

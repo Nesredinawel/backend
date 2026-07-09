@@ -51,11 +51,15 @@ func main() {
 	// -------------------------------
 	// CORS setup
 	// -------------------------------
+	allowedOrigin := os.Getenv("CORS_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"}, // adjust to your domains in production
+		AllowedOrigins:   []string{allowedOrigin},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
-		AllowCredentials: true,
+		AllowCredentials: allowedOrigin != "*",
 	})
 
 	handler := c.Handler(r)

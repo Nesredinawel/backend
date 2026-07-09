@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"auth-service/models"
 	"auth-service/utils"
@@ -36,6 +37,12 @@ func GoogleLogin() http.HandlerFunc {
 			return
 		}
 		state := uuid.New().String()
+		// Store state in Redis with 10-min TTL for CSRF validation
+		if utils.Rdb != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			utils.Rdb.Set(ctx, "oauth_state:"+state, "1", 10*time.Minute)
+			cancel()
+		}
 		url := oauthConfig.AuthCodeURL(state, oauth2.AccessTypeOffline)
 		http.Redirect(w, r, url, http.StatusTemporaryRedirect)
 	}
@@ -49,14 +56,33 @@ func GoogleCallback(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		token, err := oauthConfig.Exchange(context.Background(), code)
+		// Validate state parameter (CSRF protection)
+		state := r.URL.Query().Get("state")
+		if state == "" {
+			writeBadRequest(w, "Missing state parameter.")
+			return
+		}
+		if utils.Rdb != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			val, err := utils.Rdb.Get(ctx, "oauth_state:"+state).Result()
+			utils.Rdb.Del(ctx, "oauth_state:"+state)
+			cancel()
+			if err != nil || val == "" {
+				writeServerError(w, "Invalid or expired state parameter. Please try logging in again.")
+				return
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		token, err := oauthConfig.Exchange(ctx, code)
 		if err != nil {
 			log.Printf("Google token exchange error: %v", err)
 			writeServerError(w, "Failed to authenticate with Google. Please try again.")
 			return
 		}
 
-		client := oauthConfig.Client(context.Background(), token)
+		client := oauthConfig.Client(ctx, token)
 		resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 		if err != nil {
 			log.Printf("Google userinfo fetch error: %v", err)

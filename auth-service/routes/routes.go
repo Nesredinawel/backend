@@ -19,10 +19,12 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 	// ================================
 	// ⚙️ Global Middlewares
 	// ================================
+	r.Use(chimiddleware.RequestID)
+	r.Use(chimiddleware.RealIP)
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
-	r.Use(chimiddleware.AllowContentType("application/json", "text/plain"))
 	r.Use(middlewares.RequestLogger)
+	r.Use(middlewares.RateLimiter)
 
 	// ================================
 	// 🩺 Health Check
@@ -45,16 +47,20 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 		r.Post("/email/login", handlers.EmailLogin(cfg))
 		r.Get("/email/verify", handlers.EmailVerify(cfg))
 
+		// Token management
+		r.Post("/refresh", handlers.RefreshToken(cfg))
+		r.Post("/logout", handlers.Logout(cfg))
 	})
 
 	// ================================
-	// 🔒 Protected User Profile Routes
+	// 🔒 Protected User Routes
 	// ================================
 	r.Group(func(r chi.Router) {
-		r.Use(middlewares.JWTAuth(cfg)) // ✅ only authenticated users can access
+		r.Use(middlewares.JWTAuth(cfg))
 
 		r.Get("/user/profile", handlers.GetUserProfile(cfg))
 		r.Put("/user/profile", handlers.UpdateUserProfile(cfg))
+		r.Post("/user/password/change", handlers.ChangePassword(cfg))
 	})
 
 	// ================================
@@ -67,9 +73,6 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 	return r
 }
 
-// ===================================
-// 🖨️ Helper Function: Print Routes
-// ===================================
 func PrintRoutes(cfg utils.Config) {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -78,14 +81,18 @@ func PrintRoutes(cfg utils.Config) {
 	serverAddr := fmt.Sprintf("http://localhost:%s", port)
 
 	fmt.Println("========================================")
-	fmt.Printf("🚀 AUTH SERVICE RUNNING ON %s\n", serverAddr)
-	fmt.Println("📡 Available routes:")
-	fmt.Println("  → GET  /healthz")
-	fmt.Println("  → GET  /auth/google/login")
-	fmt.Println("  → GET  /auth/google/callback")
-	fmt.Println("  → POST /auth/email/signup")
-	fmt.Println("  → POST /auth/email/login")
-	fmt.Println("  → GET  /user/profile         (🔒 JWT required)")
-	fmt.Println("  → PUT  /user/profile         (🔒 JWT required)")
+	fmt.Printf("AUTH SERVICE RUNNING ON %s\n", serverAddr)
+	fmt.Println("Routes:")
+	fmt.Println("  GET  /healthz")
+	fmt.Println("  GET  /auth/google/login")
+	fmt.Println("  GET  /auth/google/callback")
+	fmt.Println("  POST /auth/email/signup")
+	fmt.Println("  POST /auth/email/login")
+	fmt.Println("  GET  /auth/email/verify")
+	fmt.Println("  POST /auth/refresh")
+	fmt.Println("  POST /auth/logout")
+	fmt.Println("  GET  /user/profile              (JWT)")
+	fmt.Println("  PUT  /user/profile              (JWT)")
+	fmt.Println("  POST /user/password/change      (JWT)")
 	fmt.Println("========================================")
 }

@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"notification-service/config"
 	"notification-service/handlers"
 	middleware "notification-service/middlewares"
 
@@ -8,8 +9,10 @@ import (
 )
 
 func RegisterRoutes(r *chi.Mux) {
+	cfg := config.LoadConfig()
+
 	r.Group(func(protected chi.Router) {
-		protected.Use(middleware.JWTAuthMiddleware)
+		protected.Use(middleware.JWTAuthMiddleware(cfg.JWTSecret))
 
 		protected.Get("/notifications", handlers.GetNotificationsHandler)
 		protected.Get("/notifications/count", handlers.UnreadCountHandler)

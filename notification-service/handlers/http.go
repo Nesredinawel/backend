@@ -4,18 +4,18 @@ import (
 	"log"
 	"net/http"
 
+	middleware "notification-service/middlewares"
 	"notification-service/services"
 	"notification-service/utils"
 )
 
 func GetNotificationsHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	log.Printf("[INFO] GET /notifications called | user_id=%s", userID)
-
+	userID := middleware.GetUserIDFromContext(r)
 	if userID == "" {
-		utils.WriteJSONError(w, utils.NewBadRequestError("Missing required parameter: user_id"), http.StatusBadRequest)
+		utils.WriteJSONError(w, utils.NewAuthError("Unauthorized"), http.StatusUnauthorized)
 		return
 	}
+	log.Printf("[INFO] GET /notifications called | user_id=%s", userID)
 
 	list := services.GetNotifications(userID)
 	unread := services.GetUnreadCount(userID)
@@ -30,13 +30,12 @@ func GetNotificationsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func UnreadCountHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
-	log.Printf("[INFO] GET /notifications/count called | user_id=%s", userID)
-
+	userID := middleware.GetUserIDFromContext(r)
 	if userID == "" {
-		utils.WriteJSONError(w, utils.NewBadRequestError("Missing required parameter: user_id"), http.StatusBadRequest)
+		utils.WriteJSONError(w, utils.NewAuthError("Unauthorized"), http.StatusUnauthorized)
 		return
 	}
+	log.Printf("[INFO] GET /notifications/count called | user_id=%s", userID)
 
 	cnt := services.GetUnreadCount(userID)
 
@@ -48,12 +47,16 @@ func UnreadCountHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func MarkReadHandler(w http.ResponseWriter, r *http.Request) {
-	userID := r.URL.Query().Get("user_id")
+	userID := middleware.GetUserIDFromContext(r)
 	id := r.URL.Query().Get("id")
+	if userID == "" {
+		utils.WriteJSONError(w, utils.NewAuthError("Unauthorized"), http.StatusUnauthorized)
+		return
+	}
 	log.Printf("[INFO] POST /notifications/mark-read called | user_id=%s, id=%s", userID, id)
 
-	if userID == "" || id == "" {
-		utils.WriteJSONError(w, utils.NewBadRequestError("Missing required parameters: user_id and id"), http.StatusBadRequest)
+	if id == "" {
+		utils.WriteJSONError(w, utils.NewBadRequestError("Missing required parameter: id"), http.StatusBadRequest)
 		return
 	}
 

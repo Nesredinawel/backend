@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"mood-service/routes"
 	"mood-service/utils"
@@ -23,11 +24,15 @@ func main() {
 	// -------------------------------
 	// Wrap router with CORS middleware
 	// -------------------------------
+	allowedOrigin := os.Getenv("CORS_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "http://localhost:8081"
+	}
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:8081"}, // allow Swagger UI or frontend
+		AllowedOrigins:   []string{allowedOrigin},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
-		AllowCredentials: true,
+		AllowCredentials: allowedOrigin != "*",
 	})
 	handler := c.Handler(r)
 

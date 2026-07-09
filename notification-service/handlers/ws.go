@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"notification-service/config"
 	middleware "notification-service/middlewares"
 	"notification-service/services"
 	"time"
@@ -12,7 +13,14 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" || origin == "http://localhost:8081" || origin == "http://localhost:5173" || origin == "http://localhost:3000" {
+			return true
+		}
+		allowedOrigin := config.LoadConfig().CORsOrigin
+		return allowedOrigin == "*" || allowedOrigin == origin
+	},
 }
 
 func WebSocketHandler(w http.ResponseWriter, r *http.Request) {

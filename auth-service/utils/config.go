@@ -90,6 +90,7 @@ func LoadConfig() (Config, error) {
 		log.Println("⚠️ WARNING: Missing RESEND_API_KEY (email verification won’t work)")
 	}
 
-	log.Printf("[DEBUG] Loaded config: %+v\n", cfg)
+	log.Printf("[DEBUG] Loaded config (redacted): Port=%s HasuraEndpoint=%s RedisAddr=%s PublicBaseURL=%s",
+		cfg.Port, cfg.HasuraEndpoint, cfg.RedisAddr, cfg.PublicBaseURL)
 	return cfg, nil
 }

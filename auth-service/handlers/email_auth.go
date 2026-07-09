@@ -8,9 +8,17 @@ import (
 	"time"
 
 	"auth-service/email"
+	"auth-service/middlewares"
 	"auth-service/models"
 	"auth-service/utils"
 )
+
+func validatePassword(password string) string {
+	if len(password) < 8 {
+		return "Password must be at least 8 characters."
+	}
+	return ""
+}
 
 func EmailSignup(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -31,16 +39,28 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
+		if msg := validatePassword(req.Password); msg != "" {
+			writeBadRequest(w, msg)
+			return
+		}
+
 		existing, svcErr := utils.GetUserByEmail(cfg, req.Email)
 		if svcErr == nil && existing.ID != "" {
-			writeConflict(w, "A user with this email already exists.")
+			writeSuccess(w, map[string]interface{}{
+				"message": "If an account exists, a verification email has been sent.",
+				"email":   req.Email,
+			})
 			return
 		}
 
 		hash, pwdErr := utils.HashPassword(req.Password)
 		if pwdErr != nil {
-			log.Printf("Password hash error: %v", pwdErr)
 			writeServerError(w, "Failed to process password. Please try again.")
+			return
+		}
+
+		if utils.Rdb == nil {
+			writeServerError(w, "Service temporarily unavailable. Please try again later.")
 			return
 		}
 
@@ -57,7 +77,6 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 		}
 
 		if err := utils.SavePendingSignup(utils.Rdb, token, pending, 15*time.Minute); err != nil {
-			log.Printf("Failed to save pending signup: %v", err)
 			writeServerError(w, "Failed to process signup. Please try again.")
 			return
 		}
@@ -66,7 +85,10 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 		provider := email.NewEmailProvider()
 		if err := provider.SendVerificationEmail(req.Email, verifyURL); err != nil {
 			log.Printf("Failed to send verification email: %v", err)
-			writeServerError(w, "Account not created. Failed to send verification email. Please try again.")
+			writeSuccess(w, map[string]interface{}{
+				"message": "If an account exists, a verification email has been sent.",
+				"email":   req.Email,
+			})
 			return
 		}
 
@@ -87,8 +109,7 @@ func EmailVerify(cfg utils.Config) http.HandlerFunc {
 
 		pending, err := utils.GetPendingSignup(utils.Rdb, token)
 		if err != nil {
-			log.Printf("Failed to get pending signup: %v", err)
-			writeBadRequest(w, "Invalid or expired verification token.")
+			writeBadRequest(w, "Invalid or expired verification link.")
 			return
 		}
 
@@ -102,7 +123,6 @@ func EmailVerify(cfg utils.Config) http.HandlerFunc {
 
 		userID, svcErr := utils.UpsertUserInHasura(cfg, user)
 		if svcErr != nil {
-			log.Printf("User creation error on verify: %v", svcErr)
 			writeServerError(w, "Failed to create account. Please try again.")
 			return
 		}
@@ -138,23 +158,33 @@ func EmailLogin(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
+		if middlewares.CheckAccountLockout(req.Email) {
+			writeAuthError(w, "Account temporarily locked due to too many failed attempts. Please try again later.")
+			return
+		}
+
 		user, svcErr := utils.GetUserByEmail(cfg, req.Email)
 		if svcErr != nil {
+			middlewares.RecordFailedLogin(req.Email)
 			writeAuthError(w, "Invalid email or password.")
 			return
 		}
 
 		if !utils.CheckPasswordHash(req.Password, user.Password) {
+			middlewares.RecordFailedLogin(req.Email)
 			writeAuthError(w, "Invalid email or password.")
 			return
 		}
 
+		middlewares.ResetFailedLogins(req.Email)
+
 		session, jwtErr := utils.GenerateJWT(cfg, user.ID, user.Role)
 		if jwtErr != nil {
-			log.Printf("JWT generation error: %v", jwtErr)
 			writeServerError(w, "Failed to generate session. Please try again.")
 			return
 		}
+
+		storeRefreshToken(user.ID, session.RefreshToken)
 
 		writeSuccess(w, map[string]interface{}{
 			"access_token":  session.AccessToken,

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -103,11 +104,15 @@ func main() {
 	// ===============================
 	// CORS
 	// ===============================
+	allowedOrigin := os.Getenv("CORS_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"*"}, // tighten in prod
+		AllowedOrigins:   []string{allowedOrigin},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},
-		AllowCredentials: true,
+		AllowCredentials: allowedOrigin != "*",
 	})
 
 	log.Println("🚪 API Gateway running on :8081")

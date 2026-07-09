@@ -4,8 +4,9 @@ import "os"
 
 type Config struct {
 	// Core
-	Port      string
-	JWTSecret string
+	Port       string
+	JWTSecret  string
+	CORsOrigin string
 
 	// Redis
 	RedisAddr string
@@ -32,6 +33,9 @@ func LoadConfig() Config {
 
 		// Shared JWT secret
 		JWTSecret: getenv("JWT_SECRET", ""),
+
+		// CORS origin (set to your frontend domain in production)
+		CORsOrigin: getenv("CORS_ORIGIN", "*"),
 
 		// Shared Redis address
 		RedisAddr: getenv("REDIS_ADDR", "redis:6379"),

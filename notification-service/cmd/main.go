@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
+
 	"notification-service/config"
 	"notification-service/handlers"
 	"notification-service/routes"
@@ -10,6 +12,7 @@ import (
 	"notification-service/utils"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/cors"
 )
 
 func main() {
@@ -37,10 +40,22 @@ func main() {
 	r := chi.NewRouter()
 	routes.RegisterRoutes(r)
 
+	// CORS
+	allowedOrigin := os.Getenv("CORS_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "*"
+	}
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{allowedOrigin},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowCredentials: allowedOrigin != "*",
+	})
+
 	// Start HTTP server
 	addr := ":" + cfg.Port
 	log.Printf("🚀 notification-service running on %s", addr)
 	log.Printf("📡 Listening to Redis channels: %v", channels)
 
-	log.Fatal(http.ListenAndServe(addr, r))
+	log.Fatal(http.ListenAndServe(addr, c.Handler(r)))
 }

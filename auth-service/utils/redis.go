@@ -2,7 +2,6 @@ package utils
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -14,10 +13,8 @@ var (
 	Ctx = context.Background()
 )
 
-// InitRedis initializes Redis with retry/backoff and stores in utils.Rdb
 func InitRedis(cfg Config) {
-	var err error
-	maxRetries := 10
+	maxRetries := 5
 	backoff := time.Second * 1
 
 	log.Printf("[DEBUG] Attempting to connect to Redis at %s (DB=%d)\n", cfg.RedisAddr, cfg.RedisDB)
@@ -31,16 +28,17 @@ func InitRedis(cfg Config) {
 
 		pong, err := Rdb.Ping(Ctx).Result()
 		if err == nil {
-			log.Printf("✅ Connected to Redis at %s (pong=%s)\n", cfg.RedisAddr, pong)
+			log.Printf("Connected to Redis at %s (pong=%s)\n", cfg.RedisAddr, pong)
 			return
 		}
 
-		log.Printf("⚠️ Attempt %d/%d: Failed to connect to Redis (%v). Retrying in %v...\n",
+		log.Printf("Attempt %d/%d: Failed to connect to Redis (%v). Retrying in %v...\n",
 			i, maxRetries, err, backoff)
 
 		time.Sleep(backoff)
 		backoff *= 2
 	}
 
-	panic(fmt.Sprintf("❌ Could not connect to Redis after %d attempts: %v", maxRetries, err))
+	log.Printf("WARNING: Could not connect to Redis after %d attempts. Running without Redis (email verification and rate limiting degraded).\n", maxRetries)
+	Rdb = nil
 }

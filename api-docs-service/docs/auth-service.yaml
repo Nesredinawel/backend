@@ -1,11 +1,19 @@
 openapi: 3.0.3
 info:
   title: Auth Service
-  version: 1.0.0
+  version: 2.0.0
   description: |
     Authentication & user profile management.
     Supports email/password (with email verification via Brevo) and Google OAuth2 sign-in flows.
     Issues Hasura-compatible JWT access tokens (15 min) and refresh tokens (7 days).
+
+    ## Security
+    - Rate limiting on all public endpoints (per IP)
+    - Account lockout after 10 failed login attempts (15 min)
+    - Password minimum 8 characters
+    - CSRF protection via Redis-backed state validation for Google OAuth
+    - Token blacklisting on logout
+    - HSTS and security headers on all responses
 
 servers:
   - url: http://localhost:8081
@@ -16,6 +24,8 @@ tags:
     description: Service health checks
   - name: Authentication
     description: Signup, login, and OAuth flows (public)
+  - name: Sessions
+    description: Token refresh and logout (public)
   - name: Profile
     description: User profile management (authenticated)
 
@@ -40,8 +50,12 @@ paths:
       summary: Register with email
       description: |
         Initiates email signup. Sends a verification email (via Brevo) with a
-        one-time token (valid for 15 minutes). The user must click the link
-        to complete registration.
+        one-time token (valid for 15 minutes). 
+
+        **Rate limited**: 3 requests/min per IP.
+        **Password policy**: minimum 8 characters.
+
+        Returns the same response whether the email exists or not (prevents enumeration).
       security: []
       requestBody:
         required: true
@@ -83,18 +97,18 @@ paths:
                     type: string
                     example: jane@example.com
         "400":
-          description: Invalid input (missing fields, bad JSON)
-        "409":
-          description: Email already registered
+          description: Invalid input (missing fields, bad JSON, weak password)
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /auth/email/verify:
     get:
       tags: [Authentication]
       summary: Verify email address
       description: |
-        Completes email verification. Looks up the pending signup in Redis,
-        creates the user in the database, creates an empty profile, and
-        removes the token.
+        Completes email verification. Creates the user and profile in the database.
+
+        **Rate limited**: 10 requests/min per IP.
       security: []
       parameters:
         - name: token
@@ -122,15 +136,20 @@ paths:
                     format: uuid
                     example: 550e8400-e29b-41d4-a716-446655440000
         "400":
-          description: Invalid or expired token
+          description: Invalid or expired verification link
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /auth/email/login:
     post:
       tags: [Authentication]
       summary: Login with email
       description: |
-        Authenticates with email and hashed password.
-        Returns a JWT session (access + refresh tokens) and user info.
+        Authenticates with email and password.
+        Returns a JWT session (access + refresh tokens).
+
+        **Rate limited**: 10 requests/min per IP.
+        **Account lockout**: 10 failed attempts locks account for 15 min.
       security: []
       requestBody:
         required: true
@@ -153,64 +172,43 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                    example: true
-                  access_token:
-                    type: string
-                    example: eyJhbGciOiJIUzI1NiIs...
-                  refresh_token:
-                    type: string
-                    example: eyJhbGciOiJIUzI1NiIs...
-                  expires_in:
-                    type: integer
-                    example: 900
-                  user:
-                    type: object
-                    properties:
-                      user_id:
-                        type: string
-                        format: uuid
-                      email:
-                        type: string
-                        format: email
-                      name:
-                        type: string
-                      avatar_url:
-                        type: string
-                        nullable: true
-                      provider:
-                        type: string
-                        enum: [local, google]
-                      role:
-                        type: string
-                        enum: [user, admin]
+                $ref: "#/components/schemas/LoginResponse"
         "401":
-          description: Invalid email or password
+          description: Invalid email or password (consistent message)
+        "423":
+          description: Account locked (15 min timeout)
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /auth/google/login:
     get:
       tags: [Authentication]
       summary: Google OAuth login
       description: |
-        Redirects the browser to Google's OAuth consent screen with
-        a randomly generated state parameter for CSRF protection.
+        Redirects the browser to Google's OAuth consent screen.
+        Stores the state parameter in Redis for CSRF validation.
+
+        **Rate limited**: 10 requests/min per IP.
       security: []
       responses:
         "307":
           description: Redirect to Google OAuth consent screen
+        "429":
+          $ref: "#/components/responses/RateLimited"
 
   /auth/google/callback:
     get:
       tags: [Authentication]
       summary: Google OAuth callback
       description: |
-        Handles the OAuth callback from Google. Exchanges the authorization
-        code for an access token, fetches user info from Google's userinfo
-        endpoint, upserts the user in the database, creates an empty profile,
-        and returns a JWT session.
+        Handles the OAuth callback from Google.
+        - Validates the state parameter (CSRF protection via Redis)
+        - Exchanges the authorization code for tokens
+        - Fetches user info from Google
+        - Upserts the user and creates a profile
+        - Returns a JWT session
+
+        **Rate limited**: 10 requests/min per IP.
       security: []
       parameters:
         - name: code
@@ -221,13 +219,49 @@ paths:
           description: Authorization code from Google
         - name: state
           in: query
-          required: false
+          required: true
           schema:
             type: string
-          description: OAuth state parameter for CSRF protection
+          description: OAuth state parameter for CSRF (validated against Redis)
       responses:
         "200":
           description: Google login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "400":
+          description: Missing authorization code or state parameter
+        "500":
+          description: Invalid or expired state parameter
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /auth/refresh:
+    post:
+      tags: [Sessions]
+      summary: Refresh access token
+      description: |
+        Exchanges a valid refresh token for a new token pair.
+        Validates the refresh token against Redis (SHA-256 hashed key).
+        Implements token rotation (old refresh token is replaced).
+
+        Refresh tokens have a 7-day TTL in Redis.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token:
+                  type: string
+                  description: Refresh token from login or previous refresh
+      responses:
+        "200":
+          description: Tokens refreshed
           content:
             application/json:
               schema:
@@ -238,42 +272,45 @@ paths:
                     example: true
                   access_token:
                     type: string
-                    example: eyJhbGciOiJIUzI1NiIs...
                   refresh_token:
                     type: string
-                    example: eyJhbGciOiJIUzI1NiIs...
                   expires_in:
                     type: integer
                     example: 900
-                  user:
-                    type: object
-                    properties:
-                      user_id:
-                        type: string
-                        format: uuid
-                      email:
-                        type: string
-                        format: email
-                      name:
-                        type: string
-                      avatar_url:
-                        type: string
-                        format: uri
-                        nullable: true
-                      provider:
-                        type: string
-                        example: google
-                      role:
-                        type: string
-                        example: user
-        "400":
-          description: Missing authorization code
+        "401":
+          description: Invalid or expired refresh token
+
+  /auth/logout:
+    post:
+      tags: [Sessions]
+      summary: Logout
+      description: |
+        Invalidates the current session.
+        - Blacklists the access token JTI in Redis
+        - Deletes all stored refresh tokens for the user
+        - Safe to call multiple times (idempotent)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Logged out successfully.
 
   /user/profile:
     get:
       tags: [Profile]
       summary: Get my profile
-      description: Returns the authenticated user's profile information (name, email, avatar, bio).
+      description: Returns the authenticated user's profile information.
       security:
         - bearerAuth: []
       responses:
@@ -338,6 +375,53 @@ paths:
         "401":
           description: Missing or invalid JWT
 
+  /user/password/change:
+    post:
+      tags: [Profile]
+      summary: Change password
+      description: |
+        Changes the authenticated user's password.
+        Requires the current password for verification.
+
+        **Password policy**: new password must be at least 8 characters.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password:
+                  type: string
+                  description: Current password for verification
+                  example: OldPass123
+                new_password:
+                  type: string
+                  minLength: 8
+                  description: New password (min 8 characters)
+                  example: NewSecurePass456
+      responses:
+        "200":
+          description: Password changed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Password changed successfully.
+        "400":
+          description: Invalid input or weak new password
+        "401":
+          description: Current password is incorrect or JWT missing
+
 components:
   securitySchemes:
     bearerAuth:
@@ -348,7 +432,66 @@ components:
         JWT access token. Obtain one via `/auth/email/login` or `/auth/google/callback`.
         Format: `Authorization: Bearer <token>`
 
+  responses:
+    RateLimited:
+      description: Too many requests — rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: string
+          description: Time until the rate limit resets
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              success:
+                type: boolean
+                example: false
+              error:
+                type: string
+                example: Too many requests. Please try again later.
+              code:
+                type: string
+                example: SERVER_ERROR
+
   schemas:
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        access_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIs...
+        refresh_token:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIs...
+        expires_in:
+          type: integer
+          example: 900
+        user:
+          type: object
+          properties:
+            user_id:
+              type: string
+              format: uuid
+            email:
+              type: string
+              format: email
+            name:
+              type: string
+            avatar_url:
+              type: string
+              nullable: true
+            provider:
+              type: string
+              enum: [local, google]
+            role:
+              type: string
+              enum: [user, admin]
+
     UserProfile:
       type: object
       properties:
