@@ -22,6 +22,9 @@ func main() {
 	handlers.InitGoogleOAuth(cfg)
 	log.Println("✅ Google OAuth configuration initialized")
 
+	// Initialize Redis
+	utils.InitRedis(cfg)
+
 	// Setup routes
 	r := routes.SetupRoutes(cfg)
 
