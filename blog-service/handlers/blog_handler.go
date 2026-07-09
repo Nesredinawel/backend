@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -62,6 +63,76 @@ func CreatePost(cfg utils.Config) http.HandlerFunc {
 	}
 }
 
+type mergedPost struct {
+	ID                 string `json:"id,omitempty"`
+	Title              string `json:"title"`
+	Content            string `json:"content,omitempty"`
+	Excerpt            string `json:"excerpt,omitempty"`
+	Category           string `json:"category,omitempty"`
+	Tags               any    `json:"tags,omitempty"`
+	ReadTime           int    `json:"read_time,omitempty"`
+	URL                string `json:"url,omitempty"`
+	CoverImage         string `json:"cover_image,omitempty"`
+	AuthorName         string `json:"author_name,omitempty"`
+	AuthorAvatar       string `json:"author_avatar,omitempty"`
+	PublishedAt        string `json:"published_at"`
+	Source             string `json:"source"`
+}
+
+func fetchDevtoArticles(tag string, perPage int) ([]mergedPost, error) {
+	url := "https://dev.to/api/articles?tag=" + tag
+	if perPage > 0 {
+		url += "&per_page=" + strconv.Itoa(perPage)
+	}
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("dev.to returned status %d", resp.StatusCode)
+	}
+
+	var articles []struct {
+		ID                 int    `json:"id"`
+		Title              string `json:"title"`
+		Description        string `json:"description"`
+		URL                string `json:"url"`
+		CoverImage         string `json:"cover_image"`
+		Tags               string `json:"tags"`
+		ReadingTimeMinutes int    `json:"reading_time_minutes"`
+		PublishedAt        string `json:"published_at"`
+		User               struct {
+			Name        string `json:"name"`
+			Username    string `json:"username"`
+			ProfileImage string `json:"profile_image"`
+		} `json:"user"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&articles); err != nil {
+		return nil, err
+	}
+
+	result := make([]mergedPost, len(articles))
+	for i, a := range articles {
+		result[i] = mergedPost{
+			Title:       a.Title,
+			Excerpt:     a.Description,
+			Tags:        a.Tags,
+			ReadTime:    a.ReadingTimeMinutes,
+			URL:         a.URL,
+			CoverImage:  a.CoverImage,
+			AuthorName:  a.User.Name,
+			AuthorAvatar: a.User.ProfileImage,
+			PublishedAt: a.PublishedAt,
+			Source:      "external",
+		}
+	}
+	return result, nil
+}
+
 func GetPosts(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		category := r.URL.Query().Get("category")
@@ -100,12 +171,49 @@ func GetPosts(cfg utils.Config) http.HandlerFunc {
 			posts = []models.Post{}
 		}
 
+		merged := make([]mergedPost, 0, len(posts)+10)
+		for _, p := range posts {
+			tagsStr := ""
+			if p.Tags != nil {
+				switch v := p.Tags.(type) {
+				case string:
+					tagsStr = v
+				case []interface{}:
+					for i, t := range v {
+						if i > 0 {
+							tagsStr += ", "
+						}
+						tagsStr += fmt.Sprintf("%v", t)
+					}
+				}
+			}
+			merged = append(merged, mergedPost{
+				ID:          p.ID,
+				Title:       p.Title,
+				Content:     p.Content,
+				Excerpt:     p.Excerpt,
+				Category:    p.Category,
+				Tags:        tagsStr,
+				ReadTime:    p.ReadTime,
+				PublishedAt: p.CreatedAt.Format("2006-01-02T15:04:05Z"),
+				Source:      "local",
+			})
+		}
+
+		external, err := fetchDevtoArticles("habits", limit)
+		if err != nil {
+			log.Printf("Failed to fetch dev.to articles: %v", err)
+		} else {
+			merged = append(merged, external...)
+		}
+
 		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
-			"success": true,
-			"posts":   posts,
-			"total":   total,
-			"limit":   limit,
-			"offset":  offset,
+			"success":    true,
+			"posts":      merged,
+			"total_local": total,
+			"total":      len(merged),
+			"limit":      limit,
+			"offset":     offset,
 		})
 	}
 }
@@ -219,59 +327,31 @@ func DeletePost(cfg utils.Config) http.HandlerFunc {
 	}
 }
 
-type devtoArticle struct {
-	ID                 int    `json:"id"`
-	Title              string `json:"title"`
-	Description        string `json:"description"`
-	URL                string `json:"url"`
-	CoverImage         string `json:"cover_image"`
-	Tags               string `json:"tags"`
-	ReadingTimeMinutes int    `json:"reading_time_minutes"`
-	PublishedAt        string `json:"published_at"`
-	User               struct {
-		Name        string `json:"name"`
-		Username    string `json:"username"`
-		ProfileImage string `json:"profile_image"`
-	} `json:"user"`
-}
-
 func GetExternalPosts(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tag := r.URL.Query().Get("tag")
-		perPage := r.URL.Query().Get("per_page")
+		perPageStr := r.URL.Query().Get("per_page")
 
 		if tag == "" {
 			tag = "habits"
 		}
 
-		url := "https://dev.to/api/articles?tag=" + tag
-		if perPage != "" {
-			url += "&per_page=" + perPage
+		perPage := 30
+		if perPageStr != "" {
+			if v, err := strconv.Atoi(perPageStr); err == nil && v > 0 {
+				perPage = v
+			}
 		}
 
-		resp, err := http.Get(url)
+		articles, err := fetchDevtoArticles(tag, perPage)
 		if err != nil {
 			log.Printf("Dev.to API request failed: %v", err)
 			utils.WriteJSONError(w, utils.NewServerError("Failed to fetch external posts."), http.StatusInternalServerError)
 			return
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			log.Printf("Dev.to API returned status %d", resp.StatusCode)
-			utils.WriteJSONError(w, utils.NewServerError("External API returned an error."), http.StatusInternalServerError)
-			return
-		}
-
-		var articles []devtoArticle
-		if err := json.NewDecoder(resp.Body).Decode(&articles); err != nil {
-			log.Printf("Failed to decode Dev.to response: %v", err)
-			utils.WriteJSONError(w, utils.NewServerError("Failed to parse external posts."), http.StatusInternalServerError)
-			return
-		}
 
 		if articles == nil {
-			articles = []devtoArticle{}
+			articles = []mergedPost{}
 		}
 
 		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
