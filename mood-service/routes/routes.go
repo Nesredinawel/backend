@@ -26,6 +26,7 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 
 			r.Post("/moods", handlers.CreateMood(cfg))
 			r.Get("/moods", handlers.GetMoods(cfg))
+			r.Put("/moods/{id}", handlers.UpdateMood(cfg))
 
 			// analytics
 			r.Get("/moods/analytics", handlers.MoodKPI(cfg))
@@ -58,6 +59,7 @@ func PrintRoutes(cfg utils.Config) {
 	fmt.Println("📡 Available routes:")
 	fmt.Println("  → GET    /healthz")
 	fmt.Println("  → POST   /api/v1/moods (🔒 JWT required)")
+	fmt.Println("  → PUT    /api/v1/moods/{id} (🔒 JWT required)")
 	fmt.Println("  → GET    /api/v1/moods (🔒 JWT required)")
 	fmt.Println("========================================")
 }

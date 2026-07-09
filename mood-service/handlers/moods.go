@@ -7,6 +7,8 @@ import (
 	"mood-service/middlewares"
 	"mood-service/models"
 	"mood-service/utils"
+
+	"github.com/go-chi/chi/v5"
 )
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -59,6 +61,55 @@ func CreateMood(cfg utils.Config) http.HandlerFunc {
 			"success": true,
 			"mood_id": id,
 			"message": "Mood saved successfully (updated if already exists for today)",
+		})
+	}
+}
+
+// UpdateMood updates a specific mood entry by its ID (owner only)
+func UpdateMood(cfg utils.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		userID := r.Context().Value(middlewares.CtxUserID).(string)
+		moodID := chi.URLParam(r, "id")
+
+		var req models.Mood
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			utils.WriteJSONError(w, utils.NewBadRequestError("Invalid request body. Please provide valid JSON."), http.StatusBadRequest)
+			return
+		}
+
+		id, err := utils.UpdateMoodByID(cfg, moodID, userID, req)
+		if err != nil {
+			switch err.Code {
+			case utils.ErrCodeValidation:
+				utils.WriteJSONError(w, err, http.StatusBadRequest)
+			case utils.ErrCodeNotFound:
+				utils.WriteJSONError(w, err, http.StatusNotFound)
+			case utils.ErrCodeHasura:
+				utils.WriteJSONError(w, err, http.StatusInternalServerError)
+			default:
+				utils.WriteJSONError(w, err, http.StatusInternalServerError)
+			}
+			return
+		}
+
+		utils.PublishNotification(utils.Rdb, "mood_events", utils.NotificationEvent{
+			UserID:        userID,
+			Title:         "Mood Updated",
+			Message:       "Your mood entry has been corrected.",
+			SourceService: "mood-service",
+			Action:        "MOOD_UPDATE",
+			Meta: map[string]interface{}{
+				"mood_id":   id,
+				"mood":      req.MoodScore,
+				"note":      req.Note,
+				"timestamp": req.CreatedAt,
+			},
+		})
+
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": true,
+			"mood_id": id,
+			"message": "Mood entry updated successfully",
 		})
 	}
 }

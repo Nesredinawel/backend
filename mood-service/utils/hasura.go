@@ -59,33 +59,25 @@ func getMoodFromScore(score int) (string, *ServiceError) {
 	return "", err
 }
 
-// InsertOrUpdateMood inserts or updates the user's mood for today.
-// User only sends mood_score OR mood — backend ensures both are consistent.
-func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
-	today := time.Now().Format("2006-01-02")
-
-	// Normalize and validate mood/mood_score consistency
-	var moodText string
-	var moodScore int
-
+// normalizeAndValidateMood normalizes the mood input (either mood string or mood_score)
+// and returns the canonical mood text and score. Returns error if neither is provided.
+func normalizeAndValidateMood(mood models.Mood) (moodText string, moodScore int, err *ServiceError) {
 	switch {
 	case mood.Mood != "":
 		score, err := getMoodScore(mood.Mood)
 		if err != nil {
 			log.Printf("❌ Mood validation failed: %v | user_id=%s", err, mood.UserID)
-			return "", err
+			return "", 0, err
 		}
-		moodScore = score
-		moodText = strings.Title(strings.ToLower(mood.Mood))
+		return strings.Title(strings.ToLower(mood.Mood)), score, nil
 
 	case mood.MoodScore != nil:
 		text, err := getMoodFromScore(*mood.MoodScore)
 		if err != nil {
 			log.Printf("❌ Mood score validation failed: %v | user_id=%s", err, mood.UserID)
-			return "", err
+			return "", 0, err
 		}
-		moodText = text
-		moodScore = *mood.MoodScore
+		return text, *mood.MoodScore, nil
 
 	default:
 		err := NewValidationError(
@@ -93,6 +85,17 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
 			"Either a mood name (e.g. 'good', 'angry') or a mood score (2, 4, 6, 8, 10) must be provided.",
 		)
 		log.Printf("❌ Missing input: neither mood nor mood_score provided | user_id=%s", mood.UserID)
+		return "", 0, err
+	}
+}
+
+// InsertOrUpdateMood inserts or updates the user's mood for today.
+// User only sends mood_score OR mood — backend ensures both are consistent.
+func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
+	today := time.Now().Format("2006-01-02")
+
+	moodText, moodScore, err := normalizeAndValidateMood(mood)
+	if err != nil {
 		return "", err
 	}
 
@@ -148,9 +151,9 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
 
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Printf("❌ Error sending request to Hasura: %v | user_id=%s", err, mood.UserID)
+	resp, httpErr := http.DefaultClient.Do(req)
+	if httpErr != nil {
+		log.Printf("❌ Error sending request to Hasura: %v | user_id=%s", httpErr, mood.UserID)
 		return "", NewHasuraError(
 			"Failed to save mood due to a database connection error",
 			"The mood service could not reach the database. Please try again later.",
@@ -168,7 +171,7 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
 		)
 	}
 
-	var respData struct {
+	var insertResp struct {
 		Data struct {
 			InsertMoodServiceMoodsOne struct {
 				ID        string `json:"id"`
@@ -179,13 +182,13 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
 		Errors []interface{} `json:"errors"`
 	}
 
-	if err := json.Unmarshal(b, &respData); err != nil {
+	if err := json.Unmarshal(b, &insertResp); err != nil {
 		log.Printf("❌ JSON decode failed for Hasura response: %v\nBody: %s | user_id=%s", err, string(b), mood.UserID)
 		return "", NewServerError("Failed to process the server response. Please try again.")
 	}
 
-	if len(respData.Errors) > 0 {
-		errMsg := fmt.Sprintf("%v", respData.Errors)
+	if len(insertResp.Errors) > 0 {
+		errMsg := fmt.Sprintf("%v", insertResp.Errors)
 		log.Printf("❌ Hasura GraphQL errors for user %s: %s", mood.UserID, errMsg)
 		return "", NewHasuraError(
 			"Could not save your mood entry",
@@ -194,9 +197,9 @@ func InsertOrUpdateMood(cfg Config, mood models.Mood) (string, *ServiceError) {
 	}
 
 	log.Printf("✅ Mood '%s' (score: %d) saved for user %s on %s (ID: %s)",
-		mood.Mood, moodScore, mood.UserID, today, respData.Data.InsertMoodServiceMoodsOne.ID)
+		mood.Mood, moodScore, mood.UserID, today, insertResp.Data.InsertMoodServiceMoodsOne.ID)
 
-	return respData.Data.InsertMoodServiceMoodsOne.ID, nil
+	return insertResp.Data.InsertMoodServiceMoodsOne.ID, nil
 }
 
 // GetUserMoods fetches all moods for a given user
@@ -262,6 +265,132 @@ func GetUserMoods(cfg Config, userID string) ([]models.Mood, *ServiceError) {
 
 	log.Printf("✅ Retrieved %d moods for user %s", len(respData.Data.Moods), userID)
 	return respData.Data.Moods, nil
+}
+
+// UpdateMoodByID updates a specific mood entry by its ID.
+// Only the owner of the mood can update it (enforced via user_id filter).
+func UpdateMoodByID(cfg Config, id, userID string, mood models.Mood) (string, *ServiceError) {
+	moodText, moodScore, err := normalizeAndValidateMood(mood)
+	if err != nil {
+		return "", err
+	}
+
+	moodDate := time.Now().Format("2006-01-02")
+	if mood.MoodDate != nil && *mood.MoodDate != "" {
+		moodDate = *mood.MoodDate
+	}
+
+	query := `
+	mutation UpdateMoodByID(
+		$id: uuid!,
+		$user_id: uuid!,
+		$mood: String!,
+		$emoji: String,
+		$note: String,
+		$mood_score: Int!,
+		$mood_date: date!
+	) {
+		update_mood_service_moods(
+			where: {
+				id: {_eq: $id},
+				user_id: {_eq: $user_id}
+			},
+			_set: {
+				mood: $mood,
+				emoji: $emoji,
+				note: $note,
+				mood_score: $mood_score,
+				mood_date: $mood_date,
+				updated_at: now()
+			}
+		) {
+			affected_rows
+			returning {
+				id
+				mood_date
+				mood_score
+			}
+		}
+	}`
+
+	variables := map[string]interface{}{
+		"id":         id,
+		"user_id":    userID,
+		"mood":       moodText,
+		"emoji":      mood.Emoji,
+		"note":       mood.Note,
+		"mood_score": moodScore,
+		"mood_date":  moodDate,
+	}
+
+	payload := map[string]interface{}{
+		"query":     query,
+		"variables": variables,
+	}
+
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest("POST", cfg.HasuraEndpoint, bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-hasura-admin-secret", cfg.HasuraAdminSecret)
+
+	resp, httpErr := http.DefaultClient.Do(req)
+	if httpErr != nil {
+		log.Printf("❌ Error sending UpdateMoodByID request: %v | id=%s user_id=%s", httpErr, id, userID)
+		return "", NewHasuraError(
+			"Failed to update mood due to a database connection error",
+			"The mood service could not reach the database. Please try again later.",
+		)
+	}
+	defer resp.Body.Close()
+
+	b, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("❌ Hasura returned %d for UpdateMoodByID — id=%s body: %s", resp.StatusCode, id, string(b))
+		return "", NewHasuraError(
+			"Database request failed",
+			fmt.Sprintf("The database returned an unexpected status (%d). Please try again.", resp.StatusCode),
+		)
+	}
+
+	var updateResp struct {
+		Data struct {
+			UpdateMoodServiceMoods struct {
+				AffectedRows int `json:"affected_rows"`
+				Returning    []struct {
+					ID        string `json:"id"`
+					MoodDate  string `json:"mood_date"`
+					MoodScore int    `json:"mood_score"`
+				} `json:"returning"`
+			} `json:"update_mood_service_moods"`
+		} `json:"data"`
+		Errors []interface{} `json:"errors"`
+	}
+
+	if err := json.Unmarshal(b, &updateResp); err != nil {
+		log.Printf("❌ JSON decode failed for UpdateMoodByID response: %v\nBody: %s | id=%s", err, string(b), id)
+		return "", NewServerError("Failed to process the server response. Please try again.")
+	}
+
+	if len(updateResp.Errors) > 0 {
+		errMsg := fmt.Sprintf("%v", updateResp.Errors)
+		log.Printf("❌ Hasura GraphQL errors in UpdateMoodByID for id=%s: %s", id, errMsg)
+		return "", NewHasuraError(
+			"Could not update your mood entry",
+			errMsg,
+		)
+	}
+
+	if updateResp.Data.UpdateMoodServiceMoods.AffectedRows == 0 {
+		log.Printf("⚠️ UpdateMoodByID: no rows affected — id=%s user_id=%s (not found or not owned)", id, userID)
+		return "", NewNotFoundError("Mood entry not found or you do not have permission to update it.")
+	}
+
+	updated := updateResp.Data.UpdateMoodServiceMoods.Returning[0]
+	log.Printf("✅ Mood '%s' (score: %d) updated for user %s on %s (ID: %s)",
+		moodText, moodScore, userID, updated.MoodDate, updated.ID)
+
+	return updated.ID, nil
 }
 
 // helper: get map keys (string)
