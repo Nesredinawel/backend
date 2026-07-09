@@ -1,0 +1,104 @@
+# =========================
+# Render Blueprint — Mood Tracker Backend
+# =========================
+# 100% free tier:
+#   - Postgres + Redis: managed, free
+#   - Hasura + Unified API: 2 web services, auto-sleep on idle
+#     → ~750 hrs/month shared, stays free with light traffic
+#
+# Cold starts: ~5-10s after inactivity (free tier auto-sleeps)
+
+databases:
+  - name: moodtracker-db
+    databaseName: moodtracker
+    plan: free
+    ipAllowList: []
+
+  - name: moodtracker-redis
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+services:
+  # =========================
+  # Hasura — GraphQL Engine
+  # =========================
+  - type: web
+    name: hasura
+    runtime: image
+    image:
+      url: hasura/graphql-engine:v2.37.0
+    envVars:
+      - key: HASURA_GRAPHQL_DATABASE_URL
+        fromDatabase:
+          name: moodtracker-db
+          property: connectionString
+      - key: HASURA_GRAPHQL_ADMIN_SECRET
+        sync: false
+      - key: HASURA_GRAPHQL_ENABLE_CONSOLE
+        value: "false"
+      - key: HASURA_GRAPHQL_ENABLED_SCHEMAS
+        value: auth_service,mood_service,blog_service,notification_service
+    healthCheckPath: /healthz
+    plan: free
+
+  # =========================
+  # Unified API — all Go microservices in one container
+  # Entry point: all routes at /auth, /api/v1/moods, /api/v1/posts, etc.
+  # =========================
+  - type: web
+    name: api
+    runtime: docker
+    dockerfilePath: ./deploy/Dockerfile
+    envVars:
+      # Hasura connection (shared by all internal services)
+      - key: HASURA_GRAPHQL_ENDPOINT
+        fromService:
+          name: hasura
+          type: web
+          property: hostport
+      - key: HASURA_GRAPHQL_ADMIN_SECRET
+        sync: false
+
+      # Redis (for sessions, rate limiting, pub/sub)
+      # NOTE: startup.sh parses the connectionString into REDIS_ADDR + REDIS_PASSWORD
+      - key: REDIS_URL
+        fromService:
+          name: moodtracker-redis
+          type: redis
+          property: connectionString
+
+      # JWT
+      - key: JWT_SECRET
+        sync: false
+
+      # Auth
+      - key: PUBLIC_BASE_URL
+        value: https://api.onrender.com   # update after deployment
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URL
+        value: https://api.onrender.com/auth/google/callback
+      - key: EMAIL_PROVIDER
+        value: "brevo"
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_FROM_EMAIL
+        sync: false
+
+      # CORS
+      - key: CORS_ORIGIN
+        value: "*"
+
+      # Notifications (Firebase — optional)
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: ENABLE_PUSH
+        value: "false"
+      - key: ENABLE_EMAIL
+        value: "false"
+    plan: free
