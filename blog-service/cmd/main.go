@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 
@@ -11,6 +12,11 @@ import (
 func main() {
 	// Load configuration (automatically initializes Redis)
 	cfg := utils.LoadConfig()
+
+	// Start background Dev.to article poller
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go utils.StartExternalFetcher(ctx)
 
 	// Setup routes
 	r := routes.SetupRoutes(cfg)

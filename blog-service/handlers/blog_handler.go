@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"blog-service/middlewares"
 	"blog-service/models"
@@ -63,76 +64,6 @@ func CreatePost(cfg utils.Config) http.HandlerFunc {
 	}
 }
 
-type mergedPost struct {
-	ID                 string `json:"id,omitempty"`
-	Title              string `json:"title"`
-	Content            string `json:"content,omitempty"`
-	Excerpt            string `json:"excerpt,omitempty"`
-	Category           string `json:"category,omitempty"`
-	Tags               any    `json:"tags,omitempty"`
-	ReadTime           int    `json:"read_time,omitempty"`
-	URL                string `json:"url,omitempty"`
-	CoverImage         string `json:"cover_image,omitempty"`
-	AuthorName         string `json:"author_name,omitempty"`
-	AuthorAvatar       string `json:"author_avatar,omitempty"`
-	PublishedAt        string `json:"published_at"`
-	Source             string `json:"source"`
-}
-
-func fetchDevtoArticles(tag string, perPage int) ([]mergedPost, error) {
-	url := "https://dev.to/api/articles?tag=" + tag
-	if perPage > 0 {
-		url += "&per_page=" + strconv.Itoa(perPage)
-	}
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("dev.to returned status %d", resp.StatusCode)
-	}
-
-	var articles []struct {
-		ID                 int    `json:"id"`
-		Title              string `json:"title"`
-		Description        string `json:"description"`
-		URL                string `json:"url"`
-		CoverImage         string `json:"cover_image"`
-		Tags               string `json:"tags"`
-		ReadingTimeMinutes int    `json:"reading_time_minutes"`
-		PublishedAt        string `json:"published_at"`
-		User               struct {
-			Name        string `json:"name"`
-			Username    string `json:"username"`
-			ProfileImage string `json:"profile_image"`
-		} `json:"user"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&articles); err != nil {
-		return nil, err
-	}
-
-	result := make([]mergedPost, len(articles))
-	for i, a := range articles {
-		result[i] = mergedPost{
-			Title:       a.Title,
-			Excerpt:     a.Description,
-			Tags:        a.Tags,
-			ReadTime:    a.ReadingTimeMinutes,
-			URL:         a.URL,
-			CoverImage:  a.CoverImage,
-			AuthorName:  a.User.Name,
-			AuthorAvatar: a.User.ProfileImage,
-			PublishedAt: a.PublishedAt,
-			Source:      "external",
-		}
-	}
-	return result, nil
-}
-
 func GetPosts(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		category := r.URL.Query().Get("category")
@@ -171,49 +102,48 @@ func GetPosts(cfg utils.Config) http.HandlerFunc {
 			posts = []models.Post{}
 		}
 
-		merged := make([]mergedPost, 0, len(posts)+10)
+		result := make([]map[string]interface{}, 0, len(posts)+100)
 		for _, p := range posts {
-			tagsStr := ""
-			if p.Tags != nil {
-				switch v := p.Tags.(type) {
-				case string:
-					tagsStr = v
-				case []interface{}:
-					for i, t := range v {
-						if i > 0 {
-							tagsStr += ", "
-						}
-						tagsStr += fmt.Sprintf("%v", t)
-					}
-				}
+			item := map[string]interface{}{
+				"id":        p.ID,
+				"title":     p.Title,
+				"content":   p.Content,
+				"excerpt":   p.Excerpt,
+				"category":  p.Category,
+				"tags":      tagsToString(p.Tags),
+				"read_time": p.ReadTime,
+				"source":    "local",
 			}
-			merged = append(merged, mergedPost{
-				ID:          p.ID,
-				Title:       p.Title,
-				Content:     p.Content,
-				Excerpt:     p.Excerpt,
-				Category:    p.Category,
-				Tags:        tagsStr,
-				ReadTime:    p.ReadTime,
-				PublishedAt: p.CreatedAt.Format("2006-01-02T15:04:05Z"),
-				Source:      "local",
-			})
+			if !p.CreatedAt.IsZero() {
+				item["published_at"] = p.CreatedAt.Format(time.RFC3339)
+			}
+			result = append(result, item)
 		}
 
-		external, err := fetchDevtoArticles("habits", limit)
-		if err != nil {
-			log.Printf("Failed to fetch dev.to articles: %v", err)
-		} else {
-			merged = append(merged, external...)
+		external := utils.GetCachedExternalArticles(r.Context())
+		for i := range external {
+			item := map[string]interface{}{
+				"title":         external[i].Title,
+				"excerpt":       external[i].Excerpt,
+				"tags":          external[i].Tags,
+				"read_time":     external[i].ReadTime,
+				"url":           external[i].URL,
+				"cover_image":   external[i].CoverImage,
+				"author_name":   external[i].AuthorName,
+				"author_avatar": external[i].AuthorAvatar,
+				"published_at":  external[i].PublishedAt,
+				"source":        external[i].Source,
+			}
+			result = append(result, item)
 		}
 
 		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
-			"success":    true,
-			"posts":      merged,
+			"success":     true,
+			"posts":       result,
 			"total_local": total,
-			"total":      len(merged),
-			"limit":      limit,
-			"offset":     offset,
+			"total":       len(result),
+			"limit":       limit,
+			"offset":      offset,
 		})
 	}
 }
@@ -329,35 +259,71 @@ func DeletePost(cfg utils.Config) http.HandlerFunc {
 
 func GetExternalPosts(cfg utils.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		tag := r.URL.Query().Get("tag")
-		perPageStr := r.URL.Query().Get("per_page")
-
-		if tag == "" {
-			tag = "habits"
-		}
-
-		perPage := 30
-		if perPageStr != "" {
-			if v, err := strconv.Atoi(perPageStr); err == nil && v > 0 {
-				perPage = v
-			}
-		}
-
-		articles, err := fetchDevtoArticles(tag, perPage)
-		if err != nil {
-			log.Printf("Dev.to API request failed: %v", err)
-			utils.WriteJSONError(w, utils.NewServerError("Failed to fetch external posts."), http.StatusInternalServerError)
-			return
-		}
-
+		articles := utils.GetCachedExternalArticles(r.Context())
 		if articles == nil {
-			articles = []mergedPost{}
+			articles = []utils.ExternalArticle{}
 		}
 
 		utils.WriteJSON(w, http.StatusOK, map[string]interface{}{
 			"success":  true,
 			"articles": articles,
-			"tag":      tag,
+			"tag":      "habits",
 		})
 	}
+}
+
+func StreamExternalPosts(cfg utils.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			utils.WriteJSONError(w, utils.NewServerError("streaming not supported"), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		clientID := fmt.Sprintf("client_%d", time.Now().UnixNano())
+		ch := make(chan utils.ExternalArticle, 10)
+		utils.RegisterSSEClient(clientID, ch)
+		defer utils.UnregisterSSEClient(clientID)
+
+		ctx := r.Context()
+
+		fmt.Fprintf(w, "event: connected\ndata: {\"status\":\"connected\"}\n\n")
+		flusher.Flush()
+
+		for {
+			select {
+			case article := <-ch:
+				data, _ := json.Marshal(article)
+				fmt.Fprintf(w, "event: new_article\ndata: %s\n\n", data)
+				flusher.Flush()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+func tagsToString(tags any) string {
+	if tags == nil {
+		return ""
+	}
+	switch v := tags.(type) {
+	case string:
+		return v
+	case []interface{}:
+		s := ""
+		for i, t := range v {
+			if i > 0 {
+				s += ", "
+			}
+			s += fmt.Sprintf("%v", t)
+		}
+		return s
+	}
+	return ""
 }

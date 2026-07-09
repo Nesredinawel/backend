@@ -34,6 +34,7 @@ func SetupRoutes(cfg utils.Config) http.Handler {
 		// Public endpoints (no JWT required)
 		r.Get("/posts", handlers.GetPosts(cfg))
 		r.Get("/posts/external", handlers.GetExternalPosts(cfg))
+		r.Get("/posts/external/live", handlers.StreamExternalPosts(cfg))
 		r.Get("/posts/{id}", handlers.GetPost(cfg))
 
 		// Protected endpoints (JWT required)
@@ -73,7 +74,8 @@ func PrintRoutes(cfg utils.Config) {
 	fmt.Println("Available routes:")
 	fmt.Println("  GET    /healthz")
 	fmt.Println("  GET    /api/v1/posts            (?category=&limit=&offset=)")
-	fmt.Println("  GET    /api/v1/posts/external   (?tag=&per_page=)")
+	fmt.Println("  GET    /api/v1/posts/external       (cached Dev.to articles)")
+	fmt.Println("  GET    /api/v1/posts/external/live  (SSE real-time stream)")
 	fmt.Println("  GET    /api/v1/posts/{id}")
 	fmt.Println("  POST   /api/v1/posts            (JWT + admin only)")
 	fmt.Println("  PUT    /api/v1/posts/{id}       (JWT + admin only)")
