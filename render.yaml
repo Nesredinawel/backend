@@ -2,7 +2,8 @@
 # Render Blueprint — Mood Tracker Backend
 # =========================
 # 100% free tier:
-#   - Postgres + Redis: managed, free
+#   - PostgreSQL: managed, free, auto-suspends after 15 days idle
+#   - Redis: create manually via Render dashboard (free, 10MB)
 #   - Hasura + Unified API: 2 web services, auto-sleep on idle
 #     → ~750 hrs/month shared, stays free with light traffic
 #
@@ -13,11 +14,6 @@ databases:
     databaseName: moodtracker
     plan: free
     ipAllowList: []
-
-  - name: moodtracker-redis
-    plan: free
-    ipAllowList: []
-    maxmemoryPolicy: noeviction
 
 services:
   # =========================
@@ -56,17 +52,15 @@ services:
         fromService:
           name: hasura
           type: web
-          property: hostport
+          property: hostPort
       - key: HASURA_GRAPHQL_ADMIN_SECRET
         sync: false
 
-      # Redis (for sessions, rate limiting, pub/sub)
-      # NOTE: startup.sh parses the connectionString into REDIS_ADDR + REDIS_PASSWORD
-      - key: REDIS_URL
-        fromService:
-          name: moodtracker-redis
-          type: redis
-          property: connectionString
+      # Redis — set REDIS_ADDR and REDIS_PASSWORD manually from dashboard
+      - key: REDIS_ADDR
+        sync: false
+      - key: REDIS_PASSWORD
+        sync: false
 
       # JWT
       - key: JWT_SECRET
@@ -74,7 +68,7 @@ services:
 
       # Auth
       - key: PUBLIC_BASE_URL
-        value: https://api.onrender.com   # update after deployment
+        value: https://api.onrender.com
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
@@ -92,11 +86,7 @@ services:
       - key: CORS_ORIGIN
         value: "*"
 
-      # Notifications (Firebase — optional)
-      - key: FIREBASE_PROJECT_ID
-        sync: false
-      - key: SENDGRID_API_KEY
-        sync: false
+      # Notifications
       - key: ENABLE_PUSH
         value: "false"
       - key: ENABLE_EMAIL

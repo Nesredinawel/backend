@@ -19,12 +19,7 @@ export HASURA_GRAPHQL_ENDPOINT="${HASURA_GRAPHQL_ENDPOINT:-http://hasura:8080/v1
 # Map env var name differences across services
 export HASURA_ENDPOINT=${HASURA_GRAPHQL_ENDPOINT}
 
-# Parse Render's REDIS_URL (rediss://default:password@host:port) into
-# REDIS_ADDR (host:port) and REDIS_PASSWORD
-if [ -n "$REDIS_URL" ]; then
-    export REDIS_ADDR=$(echo "$REDIS_URL" | sed 's|.*@||')
-    export REDIS_PASSWORD=$(echo "$REDIS_URL" | sed 's|rediss://[^:]*:\([^@]*\)@.*|\1|')
-fi
+# Default Redis — override via Render dashboard env vars
 export REDIS_ADDR=${REDIS_ADDR:-redis:6379}
 
 # Each service uses a different env var for its port:
