@@ -1,19 +1,46 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
+func getScheme(r *http.Request) string {
+	if r.Header.Get("X-Forwarded-Proto") == "https" || r.TLS != nil {
+		return "https"
+	}
+	return "http"
+}
+
+func getHost(r *http.Request) string {
+	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
+		return strings.Split(forwarded, ",")[0]
+	}
+	return r.Host
+}
+
 // SwaggerUI serves Swagger UI (optional, can use Redoc instead)
 func SwaggerUI(specURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Add CORS headers for browser Swagger UI
 		addCORSHeaders(w, r)
 
+		resolvedURL := specURL
+		if !strings.HasPrefix(specURL, "http") {
+			baseURL := os.Getenv("PUBLIC_BASE_URL")
+			if baseURL == "" {
+				scheme := getScheme(r)
+				host := getHost(r)
+				baseURL = fmt.Sprintf("%s://%s", scheme, host)
+			}
+			resolvedURL = strings.TrimRight(baseURL, "/") + specURL
+		}
+
 		handler := httpSwagger.Handler(
-			httpSwagger.URL(specURL),
+			httpSwagger.URL(resolvedURL),
 			httpSwagger.PersistAuthorization(true),
 		)
 		handler.ServeHTTP(w, r)
@@ -23,7 +50,6 @@ func SwaggerUI(specURL string) http.HandlerFunc {
 // OpenAPISpec serves YAML files with no caching
 func OpenAPISpec(filepath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ✅ CORS headers
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -45,7 +71,17 @@ func OpenAPISpec(filepath string) http.HandlerFunc {
 // RedocUI serves a simple HTML page loading Redoc
 func RedocUI(specURL string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Add CORS headers
+		resolvedURL := specURL
+		if !strings.HasPrefix(specURL, "http") {
+			baseURL := os.Getenv("PUBLIC_BASE_URL")
+			if baseURL == "" {
+				scheme := getScheme(r)
+				host := getHost(r)
+				baseURL = fmt.Sprintf("%s://%s", scheme, host)
+			}
+			resolvedURL = strings.TrimRight(baseURL, "/") + specURL
+		}
+
 		addCORSHeaders(w, r)
 
 		html := `<!DOCTYPE html>
@@ -55,7 +91,7 @@ func RedocUI(specURL string) http.HandlerFunc {
   <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
 </head>
 <body>
-  <redoc spec-url="` + specURL + `"></redoc>
+  <redoc spec-url="` + resolvedURL + `"></redoc>
 </body>
 </html>`
 		w.Header().Set("Content-Type", "text/html")
@@ -63,14 +99,11 @@ func RedocUI(specURL string) http.HandlerFunc {
 	}
 }
 
-// addCORSHeaders allows cross-origin requests for Swagger/Redoc
 func addCORSHeaders(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*") // Or restrict to Swagger UI origin
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-	w.Header().Set("Access-Control-Allow-Credentials", "true")
 
-	// Handle preflight requests
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
 		return

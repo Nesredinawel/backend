@@ -66,15 +66,15 @@ services:
       - key: JWT_SECRET
         sync: false
 
-      # Auth
+      # Auth + Docs
       - key: PUBLIC_BASE_URL
-        value: https://api.onrender.com
+        value: https://api-c7o6.onrender.com
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: GOOGLE_REDIRECT_URL
-        value: https://api.onrender.com/auth/google/callback
+        value: https://api-c7o6.onrender.com/auth/google/callback
       - key: EMAIL_PROVIDER
         value: "brevo"
       - key: BREVO_API_KEY
