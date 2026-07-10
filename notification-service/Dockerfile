@@ -19,12 +19,8 @@ FROM alpine:latest
 
 WORKDIR /root/
 
-# Create keys directory inside container
+# Create keys directory inside container (volume mount provides the actual file)
 RUN mkdir -p /keys
-
-# Copy Firebase credentials from the host machine
-# NOTE: this path assumes Dockerfile is inside notification-service/
-COPY ../keys/firebase-service-account.json /keys/firebase-service-account.json
 
 # Copy the compiled binary from the builder
 COPY --from=builder /notification-service .
