@@ -6,6 +6,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -41,74 +42,60 @@ func reverseProxy(target string) http.Handler {
 }
 
 func main() {
-	r := chi.NewRouter()
+	// Target URLs
+	authTarget := getEnv("AUTH_SERVICE_URL", "http://auth-service:8081")
+	moodTarget := getEnv("MOOD_SERVICE_URL", "http://mood-service:8082")
+	blogTarget := getEnv("BLOG_SERVICE_URL", "http://blog-service:8083")
+	notifTarget := getEnv("NOTIFICATION_SERVICE_URL", "http://notification-service:8084")
+	docsTarget := getEnv("API_DOCS_SERVICE_URL", "http://api-docs-service:8085")
 
-	// ===============================
-	// Global middlewares
-	// ===============================
-	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
+	// Build proxy handlers
+	authProxy := reverseProxy(authTarget)
+	moodProxy := reverseProxy(moodTarget)
+	blogProxy := reverseProxy(blogTarget)
+	notifProxy := reverseProxy(notifTarget)
+	docsProxy := reverseProxy(docsTarget)
 
-	// ===============================
-	// Health check & root
-	// ===============================
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	// Chi router handles healthz, root, and unmatched routes
+	chiRouter := chi.NewRouter()
+
+	chiRouter.Use(middleware.RequestID)
+	chiRouter.Use(middleware.RealIP)
+	chiRouter.Use(middleware.Logger)
+	chiRouter.Use(middleware.Recoverer)
+
+	chiRouter.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("api-gateway ok"))
 	})
 
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+	chiRouter.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/swagger/index.html", http.StatusFound)
 	})
 
 	// ===============================
-	// AUTH SERVICE (8081)
+	// Main handler: direct prefix routing for all proxy paths
+	// (bypasses chi's pattern matching to avoid path-stripping issues)
 	// ===============================
-	authTarget := getEnv("AUTH_SERVICE_URL", "http://auth-service:8081")
-	r.Handle("/auth/*", reverseProxy(authTarget))
-	r.Handle("/auth", reverseProxy(authTarget))
+	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
 
-	r.Handle("/user/*", reverseProxy(authTarget))
-	r.Handle("/user", reverseProxy(authTarget))
-
-	// ===============================
-	// MOOD SERVICE (8082)
-	// ===============================
-	moodTarget := getEnv("MOOD_SERVICE_URL", "http://mood-service:8082")
-	r.Handle("/api/v1/moods/*", reverseProxy(moodTarget))
-	r.Handle("/api/v1/moods", reverseProxy(moodTarget))
-
-	// ===============================
-	// BLOG SERVICE (8083)
-	// ===============================
-	blogTarget := getEnv("BLOG_SERVICE_URL", "http://blog-service:8083")
-	r.Handle("/api/v1/posts/*", reverseProxy(blogTarget))
-	r.Handle("/api/v1/posts", reverseProxy(blogTarget))
-
-	// ===============================
-	// NOTIFICATION SERVICE (8084)
-	// ===============================
-	notifTarget := getEnv("NOTIFICATION_SERVICE_URL", "http://notification-service:8084")
-	r.Handle("/notifications/*", reverseProxy(notifTarget))
-	r.Handle("/notifications", reverseProxy(notifTarget))
-
-	r.Handle("/ws/*", reverseProxy(notifTarget))
-	r.Handle("/ws", reverseProxy(notifTarget))
-
-	// ===============================
-	// API DOCS SERVICE (8085)
-	// ===============================
-	docsTarget := getEnv("API_DOCS_SERVICE_URL", "http://api-docs-service:8085")
-	r.Handle("/docs/*", reverseProxy(docsTarget))
-	r.Handle("/docs", reverseProxy(docsTarget))
-
-	r.Handle("/swagger/*", reverseProxy(docsTarget))
-	r.Handle("/swagger", reverseProxy(docsTarget))
-
-	r.Handle("/redoc/*", reverseProxy(docsTarget))
-	r.Handle("/redoc", reverseProxy(docsTarget))
+		switch {
+		case strings.HasPrefix(path, "/auth") || strings.HasPrefix(path, "/user"):
+			authProxy.ServeHTTP(w, r)
+		case strings.HasPrefix(path, "/api/v1/moods"):
+			moodProxy.ServeHTTP(w, r)
+		case strings.HasPrefix(path, "/api/v1/posts"):
+			blogProxy.ServeHTTP(w, r)
+		case strings.HasPrefix(path, "/notifications") || strings.HasPrefix(path, "/ws"):
+			notifProxy.ServeHTTP(w, r)
+		case strings.HasPrefix(path, "/docs") || strings.HasPrefix(path, "/swagger") || strings.HasPrefix(path, "/redoc"):
+			docsProxy.ServeHTTP(w, r)
+		default:
+			// Let chi handle /healthz, /, and anything else
+			chiRouter.ServeHTTP(w, r)
+		}
+	})
 
 	// ===============================
 	// CORS
@@ -125,5 +112,5 @@ func main() {
 	})
 
 	log.Println("🚪 API Gateway running on :8081")
-	log.Fatal(http.ListenAndServe(":8081", c.Handler(r)))
+	log.Fatal(http.ListenAndServe(":8081", c.Handler(mainHandler)))
 }
