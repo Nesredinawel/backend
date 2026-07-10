@@ -52,11 +52,15 @@ func main() {
 	r.Use(middleware.Recoverer)
 
 	// ===============================
-	// Health check
+	// Health check & root
 	// ===============================
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("api-gateway ok"))
+	})
+
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/swagger/index.html", http.StatusFound)
 	})
 
 	// ===============================
