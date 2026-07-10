@@ -33,7 +33,11 @@ func reverseProxy(target string) http.Handler {
 			req.Header.Set("X-Forwarded-Host", req.Host)
 		}
 		if req.Header.Get("X-Forwarded-Proto") == "" {
-			req.Header.Set("X-Forwarded-Proto", "https")
+			proto := "http"
+			if req.TLS != nil {
+				proto = "https"
+			}
+			req.Header.Set("X-Forwarded-Proto", proto)
 		}
 		req.Host = url.Host
 	}

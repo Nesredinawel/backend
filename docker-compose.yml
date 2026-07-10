@@ -155,6 +155,8 @@ services:
   api-docs-service:
     build:
       context: ./api-docs-service
+    env_file:
+      - .env
     expose:
       - "8085"
     volumes:
