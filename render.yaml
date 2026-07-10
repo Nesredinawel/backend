@@ -46,6 +46,7 @@ services:
     name: api
     runtime: docker
     dockerfilePath: ./deploy/Dockerfile
+    port: 8081
     envVars:
       # Hasura connection (shared by all internal services)
       - key: HASURA_GRAPHQL_ENDPOINT

@@ -71,5 +71,5 @@ func main() {
 
 	port := cfg.Port
 	log.Printf("Auth service running on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	log.Fatal(http.ListenAndServe("127.0.0.1:"+port, handler))
 }

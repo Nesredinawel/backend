@@ -68,7 +68,7 @@ func main() {
 	// Start server
 	// -------------------------------
 	log.Println("API Docs running on :8085")
-	if err := http.ListenAndServe(":8085", handler); err != nil {
+	if err := http.ListenAndServe("127.0.0.1:8085", handler); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 }
