@@ -47,6 +47,7 @@ services:
     runtime: docker
     dockerfilePath: ./deploy/Dockerfile
     port: 8081
+    healthCheckPath: /healthz
     envVars:
       # Hasura connection (shared by all internal services)
       - key: HASURA_GRAPHQL_ENDPOINT
