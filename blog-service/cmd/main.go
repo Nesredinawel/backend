@@ -40,6 +40,10 @@ func main() {
 	})
 
 	// Start server
-	log.Printf("[blog-service] ✅ Starting server on port %s\n", cfg.Port)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, c.Handler(r)))
+	addr := ":" + cfg.Port
+	if bind := os.Getenv("BIND_ADDR"); bind != "" {
+		addr = bind + ":" + cfg.Port
+	}
+	log.Printf("[blog-service] ✅ Starting server on %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, c.Handler(r)))
 }

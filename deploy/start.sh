@@ -22,6 +22,9 @@ export HASURA_ENDPOINT=${HASURA_GRAPHQL_ENDPOINT}
 # Default Redis — override via Render dashboard env vars
 export REDIS_ADDR=${REDIS_ADDR:-redis:6379}
 
+# Internal services bind to localhost only so Render only detects the gateway
+export BIND_ADDR=127.0.0.1
+
 # Each service uses a different env var for its port:
 #   auth   → PORT_1    mood → PORT_2    blog → PORT_3
 #   notif  → PORT      docs → hardcoded  gw   → hardcoded

@@ -54,6 +54,9 @@ func main() {
 
 	// Start HTTP server
 	addr := ":" + cfg.Port
+	if bind := os.Getenv("BIND_ADDR"); bind != "" {
+		addr = bind + ":" + cfg.Port
+	}
 	log.Printf("🚀 notification-service running on %s", addr)
 	log.Printf("📡 Listening to Redis channels: %v", channels)
 

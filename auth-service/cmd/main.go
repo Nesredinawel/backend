@@ -70,6 +70,10 @@ func main() {
 	handler := c.Handler(r)
 
 	port := cfg.Port
-	log.Printf("Auth service running on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, handler))
+	addr := ":" + port
+	if bind := os.Getenv("BIND_ADDR"); bind != "" {
+		addr = bind + ":" + port
+	}
+	log.Printf("Auth service running on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }

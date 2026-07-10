@@ -37,6 +37,10 @@ func main() {
 	handler := c.Handler(r)
 
 	// Start server
-	log.Printf("[mood-service] ✅ Starting server on port %s\n", cfg.Port)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, handler))
+	addr := ":" + cfg.Port
+	if bind := os.Getenv("BIND_ADDR"); bind != "" {
+		addr = bind + ":" + cfg.Port
+	}
+	log.Printf("[mood-service] ✅ Starting server on %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, handler))
 }
