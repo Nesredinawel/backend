@@ -63,61 +63,48 @@ func main() {
 	// AUTH SERVICE (8081)
 	// ===============================
 	authTarget := getEnv("AUTH_SERVICE_URL", "http://auth-service:8081")
-	r.Route("/auth", func(r chi.Router) {
-		r.Mount("/", reverseProxy(authTarget))
-	})
+	r.HandleFunc("/auth/*", reverseProxy(authTarget))
+	r.HandleFunc("/auth", reverseProxy(authTarget))
 
-	r.Route("/user", func(r chi.Router) {
-		r.Mount("/", reverseProxy(authTarget))
-	})
+	r.HandleFunc("/user/*", reverseProxy(authTarget))
+	r.HandleFunc("/user", reverseProxy(authTarget))
 
 	// ===============================
 	// MOOD SERVICE (8082)
 	// ===============================
 	moodTarget := getEnv("MOOD_SERVICE_URL", "http://mood-service:8082")
-	r.Route("/api/v1/moods", func(r chi.Router) {
-		r.Mount("/", reverseProxy(moodTarget))
-	})
-
-	r.Route("/api/v1/moods/analytics", func(r chi.Router) {
-		r.Mount("/", reverseProxy(moodTarget))
-	})
+	r.HandleFunc("/api/v1/moods/*", reverseProxy(moodTarget))
+	r.HandleFunc("/api/v1/moods", reverseProxy(moodTarget))
 
 	// ===============================
 	// BLOG SERVICE (8083)
 	// ===============================
 	blogTarget := getEnv("BLOG_SERVICE_URL", "http://blog-service:8083")
-	r.Route("/api/v1/posts", func(r chi.Router) {
-		r.Mount("/", reverseProxy(blogTarget))
-	})
+	r.HandleFunc("/api/v1/posts/*", reverseProxy(blogTarget))
+	r.HandleFunc("/api/v1/posts", reverseProxy(blogTarget))
 
 	// ===============================
 	// NOTIFICATION SERVICE (8084)
 	// ===============================
 	notifTarget := getEnv("NOTIFICATION_SERVICE_URL", "http://notification-service:8084")
-	r.Route("/notifications", func(r chi.Router) {
-		r.Mount("/", reverseProxy(notifTarget))
-	})
+	r.HandleFunc("/notifications/*", reverseProxy(notifTarget))
+	r.HandleFunc("/notifications", reverseProxy(notifTarget))
 
-	r.Route("/ws", func(r chi.Router) {
-		r.Mount("/", reverseProxy(notifTarget))
-	})
+	r.HandleFunc("/ws/*", reverseProxy(notifTarget))
+	r.HandleFunc("/ws", reverseProxy(notifTarget))
 
 	// ===============================
 	// API DOCS SERVICE (8085)
 	// ===============================
 	docsTarget := getEnv("API_DOCS_SERVICE_URL", "http://api-docs-service:8085")
-	r.Route("/docs", func(r chi.Router) {
-		r.Mount("/", reverseProxy(docsTarget))
-	})
+	r.HandleFunc("/docs/*", reverseProxy(docsTarget))
+	r.HandleFunc("/docs", reverseProxy(docsTarget))
 
-	r.Route("/swagger", func(r chi.Router) {
-		r.Mount("/", reverseProxy(docsTarget))
-	})
+	r.HandleFunc("/swagger/*", reverseProxy(docsTarget))
+	r.HandleFunc("/swagger", reverseProxy(docsTarget))
 
-	r.Route("/redoc", func(r chi.Router) {
-		r.Mount("/", reverseProxy(docsTarget))
-	})
+	r.HandleFunc("/redoc/*", reverseProxy(docsTarget))
+	r.HandleFunc("/redoc", reverseProxy(docsTarget))
 
 	// ===============================
 	// CORS
