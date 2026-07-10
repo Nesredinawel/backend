@@ -24,10 +24,16 @@ func reverseProxy(target string) http.Handler {
 	url, _ := url.Parse(target)
 	proxy := httputil.NewSingleHostReverseProxy(url)
 
-	// preserve original headers (JWT!)
+	// preserve original headers (JWT!) and forward the real host/proto
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
+		if req.Header.Get("X-Forwarded-Host") == "" {
+			req.Header.Set("X-Forwarded-Host", req.Host)
+		}
+		if req.Header.Get("X-Forwarded-Proto") == "" {
+			req.Header.Set("X-Forwarded-Proto", "https")
+		}
 		req.Host = url.Host
 	}
 
