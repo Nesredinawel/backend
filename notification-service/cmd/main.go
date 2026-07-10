@@ -53,7 +53,7 @@ func main() {
 	})
 
 	// Start HTTP server
-	addr := "127.0.0.1:" + cfg.Port
+	addr := ":" + cfg.Port
 	log.Printf("🚀 notification-service running on %s", addr)
 	log.Printf("📡 Listening to Redis channels: %v", channels)
 

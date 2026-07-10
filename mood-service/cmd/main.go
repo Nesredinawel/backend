@@ -38,5 +38,5 @@ func main() {
 
 	// Start server
 	log.Printf("[mood-service] ✅ Starting server on port %s\n", cfg.Port)
-	log.Fatal(http.ListenAndServe("127.0.0.1:"+cfg.Port, handler))
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, handler))
 }

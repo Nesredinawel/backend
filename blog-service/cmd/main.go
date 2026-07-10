@@ -41,5 +41,5 @@ func main() {
 
 	// Start server
 	log.Printf("[blog-service] ✅ Starting server on port %s\n", cfg.Port)
-	log.Fatal(http.ListenAndServe("127.0.0.1:"+cfg.Port, c.Handler(r)))
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, c.Handler(r)))
 }
