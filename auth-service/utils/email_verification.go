@@ -1,15 +1,12 @@
 package utils
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 type PendingSignup struct {
@@ -17,6 +14,14 @@ type PendingSignup struct {
 	Email        string `json:"email"`
 	PasswordHash string `json:"password_hash"`
 }
+
+var (
+	pendingSignupsMu sync.RWMutex
+	pendingSignups   = map[string]struct {
+		data PendingSignup
+		exp  time.Time
+	}{}
+)
 
 // GenerateVerificationToken creates a secure random token
 func GenerateVerificationToken() (string, error) {
@@ -28,46 +33,40 @@ func GenerateVerificationToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// SavePendingSignup stores signup data in Redis temporarily
-func SavePendingSignup(rdb *redis.Client, token string, data PendingSignup, ttl time.Duration) error {
-	ctx := context.Background()
-	key := fmt.Sprintf("verify:%s", token)
-
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		log.Println("❌ Failed to marshal pending signup data:", err)
-		return err
-	}
-
-	if err := rdb.Set(ctx, key, jsonData, ttl).Err(); err != nil {
-		log.Printf("❌ Failed to save pending signup in Redis: %v\n", err)
-		return err
-	}
-
+// SavePendingSignup stores signup data in memory temporarily
+func SavePendingSignup(rdb interface{}, token string, data PendingSignup, ttl time.Duration) error {
+	pendingSignupsMu.Lock()
+	pendingSignups[token] = struct {
+		data PendingSignup
+		exp  time.Time
+	}{data: data, exp: time.Now().Add(ttl)}
+	pendingSignupsMu.Unlock()
 	return nil
 }
 
 // GetPendingSignup retrieves signup data
-func GetPendingSignup(rdb *redis.Client, token string) (PendingSignup, error) {
-	ctx := context.Background()
-	key := fmt.Sprintf("verify:%s", token)
+func GetPendingSignup(rdb interface{}, token string) (PendingSignup, error) {
+	pendingSignupsMu.RLock()
+	entry, ok := pendingSignups[token]
+	pendingSignupsMu.RUnlock()
 
-	val, err := rdb.Get(ctx, key).Result()
-	if err != nil {
-		return PendingSignup{}, err
+	if !ok {
+		return PendingSignup{}, fmt.Errorf("verification token not found or expired")
 	}
 
-	var data PendingSignup
-	if err := json.Unmarshal([]byte(val), &data); err != nil {
-		return PendingSignup{}, err
+	if time.Now().After(entry.exp) {
+		pendingSignupsMu.Lock()
+		delete(pendingSignups, token)
+		pendingSignupsMu.Unlock()
+		return PendingSignup{}, fmt.Errorf("verification token expired")
 	}
 
-	return data, nil
+	return entry.data, nil
 }
 
 // DeletePendingSignup removes signup data
-func DeletePendingSignup(rdb *redis.Client, token string) {
-	ctx := context.Background()
-	key := fmt.Sprintf("verify:%s", token)
-	rdb.Del(ctx, key)
+func DeletePendingSignup(rdb interface{}, token string) {
+	pendingSignupsMu.Lock()
+	delete(pendingSignups, token)
+	pendingSignupsMu.Unlock()
 }

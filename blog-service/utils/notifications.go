@@ -22,6 +22,10 @@ type NotificationEvent struct {
 
 // PublishNotification publishes structured event to Redis
 func PublishNotification(rdb *redis.Client, channel string, event NotificationEvent) {
+	if rdb == nil {
+		return
+	}
+
 	ctx := context.Background()
 
 	// Fill timestamp if not set

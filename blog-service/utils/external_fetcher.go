@@ -63,6 +63,9 @@ func broadcastNewArticle(article ExternalArticle) {
 }
 
 func getKnownIDs(ctx context.Context) (map[int]bool, error) {
+	if Rdb == nil {
+		return make(map[int]bool), nil
+	}
 	raw, err := Rdb.SMembers(ctx, devtoKnownKey).Result()
 	if err != nil {
 		return nil, err
@@ -168,19 +171,21 @@ func fetchAndCache(ctx context.Context) {
 		}
 	}
 
-	pipe := Rdb.Pipeline()
-	pipe.Del(ctx, devtoKnownKey)
-	for _, a := range articles {
-		pipe.SAdd(ctx, devtoKnownKey, a.ID)
-	}
-	pipe.Persist(ctx, devtoKnownKey)
-	if _, err := pipe.Exec(ctx); err != nil {
-		log.Printf("[fetcher] failed to update known IDs: %v", err)
-	}
+	if Rdb != nil {
+		pipe := Rdb.Pipeline()
+		pipe.Del(ctx, devtoKnownKey)
+		for _, a := range articles {
+			pipe.SAdd(ctx, devtoKnownKey, a.ID)
+		}
+		pipe.Persist(ctx, devtoKnownKey)
+		if _, err := pipe.Exec(ctx); err != nil {
+			log.Printf("[fetcher] failed to update known IDs: %v", err)
+		}
 
-	data, _ := json.Marshal(external)
-	if err := Rdb.Set(ctx, devtoCacheKey, data, cacheTTL).Err(); err != nil {
-		log.Printf("[fetcher] failed to cache articles: %v", err)
+		data, _ := json.Marshal(external)
+		if err := Rdb.Set(ctx, devtoCacheKey, data, cacheTTL).Err(); err != nil {
+			log.Printf("[fetcher] failed to cache articles: %v", err)
+		}
 	}
 
 	log.Printf("[fetcher] cached %d articles (%d new)", len(external), len(newArticles))
@@ -191,6 +196,9 @@ func fetchAndCache(ctx context.Context) {
 }
 
 func GetCachedExternalArticles(ctx context.Context) []ExternalArticle {
+	if Rdb == nil {
+		return nil
+	}
 	data, err := Rdb.Get(ctx, devtoCacheKey).Bytes()
 	if err != nil {
 		return nil

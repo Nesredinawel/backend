@@ -59,11 +59,6 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		if utils.Rdb == nil {
-			writeServerError(w, "Service temporarily unavailable. Please try again later.")
-			return
-		}
-
 		token, tokenErr := utils.GenerateVerificationToken()
 		if tokenErr != nil {
 			writeServerError(w, "Failed to generate verification token. Please try again.")
@@ -76,7 +71,7 @@ func EmailSignup(cfg utils.Config) http.HandlerFunc {
 			PasswordHash: hash,
 		}
 
-		if err := utils.SavePendingSignup(utils.Rdb, token, pending, 15*time.Minute); err != nil {
+		if err := utils.SavePendingSignup(nil, token, pending, 15*time.Minute); err != nil {
 			writeServerError(w, "Failed to process signup. Please try again.")
 			return
 		}
@@ -107,7 +102,7 @@ func EmailVerify(cfg utils.Config) http.HandlerFunc {
 			return
 		}
 
-		pending, err := utils.GetPendingSignup(utils.Rdb, token)
+		pending, err := utils.GetPendingSignup(nil, token)
 		if err != nil {
 			writeBadRequest(w, "Invalid or expired verification link.")
 			return
@@ -131,7 +126,7 @@ func EmailVerify(cfg utils.Config) http.HandlerFunc {
 			log.Printf("Profile creation error on verify: %v", err)
 		}
 
-		utils.DeletePendingSignup(utils.Rdb, token)
+		utils.DeletePendingSignup(nil, token)
 
 		writeSuccess(w, map[string]interface{}{
 			"message": "Email verified successfully. You can now log in.",

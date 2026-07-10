@@ -14,6 +14,11 @@ import (
 
 // StartRedisListener subscribes to Redis channels
 func StartRedisListener(channels ...string) {
+	if utils.Rdb == nil {
+		log.Println("[Redis] ⚠️ Redis not available — notification listener not started.")
+		return
+	}
+
 	pubsub := utils.Rdb.Subscribe(utils.Ctx, channels...)
 	ch := pubsub.Channel()
 
